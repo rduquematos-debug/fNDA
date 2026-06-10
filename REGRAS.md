@@ -4,6 +4,7 @@
 
 - Commits must be in **English**
 - Code comments must be in **English**
+- Assistant speaks **Portuguese from Portugal (pt-pt)** only — Brazilian Portuguese is not allowed
 - User can speak Portuguese or English — assistant adapts
 
 ## File Handling
