@@ -1,0 +1,3 @@
+*.o
+*.kext/Contents/MacOS/*
+dev/
