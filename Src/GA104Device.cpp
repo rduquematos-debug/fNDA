@@ -6,6 +6,7 @@
 #include <libkern/libkern.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/pci/IOPCIDevice.h>
+#include <mach-o/getsect.h>
 #include <sys/types.h>
 #include <sys/sysctl.h>
 
@@ -210,6 +211,27 @@ bool GA104Device::start(IOService *provider)
                               OSNumber::withNumber(0x7FFULL, 32));
         setProperty("IOAccelProperties", accelProps);
         accelProps->release();
+    }
+
+    // Auto-load GSP firmware from embedded __DATA.__gsp_firmware section, then boot
+    IOLog("GA104: Auto-loading GSP firmware...\n");
+    unsigned long fwSize = 0;
+    uint8_t *fwData = (uint8_t *)getsectdata("__DATA", "__gsp_firmware", &fwSize);
+    if (fwData && fwSize > 0) {
+        IOLog("GA104: Firmware found in __DATA.__gsp_firmware: %lu bytes\n", fwSize);
+        if (createFWBuffer((uint32_t)fwSize) == kIOReturnSuccess) {
+            memcpy(fFWBuffer, fwData, fwSize);
+            loadGSPFirmware();
+            if (fGSPFirmware) fGSPFirmware->loadExternal(fFWBuffer, (uint32_t)fwSize);
+            IOLog("GA104: Firmware loaded, booting GSP...\n");
+            IOReturn gspRet = bootGSP();
+            if (gspRet == kIOReturnSuccess)
+                IOLog("GA104: GSP boot OK!\n");
+            else
+                IOLog("GA104: GSP boot failed: 0x%x\n", gspRet);
+        }
+    } else {
+        IOLog("GA104: __DATA.__gsp_firmware section not found (gsp_firmware.bin missing at link time)\n");
     }
 
     registerService();
@@ -602,6 +624,8 @@ IOReturn GA104Device::bootSEC2()
             setProperty("GA104SEC2_Cpuctl", cpuctl, 32);
             setProperty("GA104SEC2_Mailbox0", mb0, 32);
             halted = true;
+            IOLog("GA104: SEC2 HALTED mb0=0x%08x mb1=0x%08x fSEC2Booted=%d\n",
+                  mb0, SEC2_RD(0x0044), fSEC2Booted);
             break;
         }
         IOSleep(10);
@@ -979,6 +1003,9 @@ IOReturn GA104Device::bootGSP()
         uint32_t gspMb1 = readReg32(FALCON_MAILBOX1);
         IOLog("GA104: GSP after SEC2: CPUCTL=0x%08x BOOTVEC=0x%08x MB0=0x%08x MB1=0x%08x\n",
               gspCpuctl, gspBootvec, gspMb0, gspMb1);
+        IOLog("GA104: SEC2_DONE — GSP RISC-V BCR=0x%08x IRQSTAT=0x%08x\n",
+              readReg32(FALCON_BCR_CTRL),
+              readReg32(FALCON_IRQSTAT));
 
         // SEC2 booted the GSP; ensure VRAM cmdq readPtr is reset to 0
         if (fVramCmdqEntryBase) {
@@ -1046,6 +1073,39 @@ IOReturn GA104Device::bootGSP()
                 wrVRAM(0xC00000 + fCmdqOff + 0x10, &wp, 4);
             __sync_synchronize();
             IOLog("GA104: Pre-boot RPCs done (%u entries)\n", wp);
+
+            // DEBUG: dump LibOS init args
+            IOLog("GA104: LibOS dump (fLibosPhys=0x%llx):\n", fLibosPhys);
+            for (int li = 0; li < 4; li++) {
+                volatile uint64_t *lib64 = (volatile uint64_t*)((uint8_t*)fLibosBuf + li * 32);
+                uint8_t *id = (uint8_t*)&lib64[0];
+                IOLog("  [%d] id=0x%016llx ('%c%c%c%c%c%c%c%c') pa=0x%llx sz=%llu\n",
+                      li, lib64[0],
+                      id[0],id[1],id[2],id[3],id[4],id[5],id[6],id[7],
+                      lib64[1], lib64[2]);
+            }
+            // DEBUG: dump RMARGS
+            IOLog("GA104: RMARGS dump (fRmargsPhys=0x%llx):\n", fRmargsPhys);
+            volatile uint32_t *rm32 = (volatile uint32_t*)fRmargsBuf;
+            IOLog("  shmPA=0x%08x%08x pteCnt=%u cmdqOff=0x%x statqOff=0x%x\n",
+                  rm32[1], rm32[0], rm32[2], rm32[4], rm32[6]);
+            IOLog("  hdrSz=%u elMin=%u elMax=%u hdrAlign=%u elAlign=%u\n",
+                  (uint32_t)rm32[8], (uint32_t)rm32[10], (uint32_t)rm32[12],
+                  rm32[14], rm32[15]);
+            // DEBUG: cmp cmdq entry 0 sysmem vs VRAM
+            IOLog("GA104: CMDQ entry[0] sysmem:\n");
+            volatile uint32_t *ce = (volatile uint32_t*)fCmdqEntryBase;
+            for (int ci = 0; ci < 16; ci++)
+                if (ce[ci]) IOLog("  [0x%02x] 0x%08x\n", ci*4, ce[ci]);
+            if (fVramCmdqEntryBase) {
+                volatile uint32_t *ve = (volatile uint32_t*)fVramCmdqEntryBase;
+                IOLog("GA104: CMDQ entry[0] VRAM:\n");
+                for (int ci = 0; ci < 16; ci++)
+                    if (ve[ci] || ce[ci])
+                        IOLog("  [0x%02x] 0x%08x (sys: 0x%08x %s)\n",
+                              ci*4, ve[ci], ce[ci],
+                              ve[ci] == ce[ci] ? "==" : "!=");
+            }
         }
 
         // Configure IRQ routing for RISC-V doorbell (como no SEC2 trampoline path)
@@ -1119,8 +1179,13 @@ IOReturn GA104Device::bootGSP()
             IOSleep(100);
             if (!fShmBuf) continue;
             
+            uint32_t cmdqRp = *(volatile uint32_t*)((uint8_t*)fShmBuf + fCmdqOff + 0x20);
             // Poll MSGQ writePtr — firmware writes events here after processing
             uint32_t msgqWp = *(volatile uint32_t*)((uint8_t*)fShmBuf + fMsgqOff + 0x10);
+
+            if ((waitMs % 5000) == 0)
+                IOLog("GA104: poll %dms: cmdq rPtr=%u msgq wPtr=%u\n", waitMs, cmdqRp, msgqWp);
+
             if (msgqWp > fLastMsgqRp) {
                 for (uint32_t ei = fLastMsgqRp; ei < msgqWp; ei++) {
                     uint32_t eIdx = ei % GSP_QUEUE_MSG_COUNT;
@@ -1141,9 +1206,8 @@ IOReturn GA104Device::bootGSP()
             }
             
             // Also check cmdq readPtr
-            uint32_t rp = *(volatile uint32_t*)((uint8_t*)fShmBuf + fCmdqOff + 0x20);
-            if (rp > 0) {
-                IOLog("GA104: CMDQ processed after %dms! rPtr=%u\n", waitMs, rp);
+            if (cmdqRp > 0) {
+                IOLog("GA104: CMDQ processed after %dms! rPtr=%u\n", waitMs, cmdqRp);
                 break;
             }
         }

@@ -73,7 +73,7 @@
 #define FALCON_ICD_RW                     0x0188
 #define FALCON_CPUCTL                     0x0100
 #define FALCON_BOOTVEC                    0x0104
-#define FALCON_OS                         0x012C
+#define FALCON_OS                         0x0080
 #define FALCON_HWCFG                      0x0108
 #define FALCON_DMACTL                     0x010C
 #define FALCON_DMATRFBASE                 0x0110

@@ -120,9 +120,7 @@ IOReturn GSPProtocol::buildRmAlloc(GspRpcMessageHeader *msg,
                                     NvHandle hObject, uint32_t hClass,
                                     uint32_t paramsSize, const void *params)
 {
-    GspRmAllocParams *rm = (GspRmAllocParams*)msg->length; // FIXME: data follows header
-    // Actually we need to build the payload after the header
-    // For now, just build the RPC header + empty alloc params
+    // Build alloc params after the RPC header
     struct {
         NvHandle hClient;
         NvHandle hParent;

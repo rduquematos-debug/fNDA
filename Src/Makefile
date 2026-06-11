@@ -18,10 +18,14 @@ CXXFLAGS = -std=c++11 -c -Wall \
     -fno-rtti -fno-exceptions -fno-builtin \
     -mkernel -nostdlib
 
+FW_BIN = ../Resources/gsp_firmware.bin
 LDFLAGS = -Xlinker -kext -arch x86_64 \
     -nostdlib \
     -lkmod -lcc_kext \
     $(SDK_FLAGS)
+ifneq ($(wildcard $(FW_BIN)),)
+LDFLAGS += -sectcreate __DATA __gsp_firmware $(FW_BIN)
+endif
 
 KEXT_DIR = ../$(KEXT_NAME).kext
 KEXT_BIN = $(KEXT_DIR)/Contents/MacOS/$(KEXT_NAME)
