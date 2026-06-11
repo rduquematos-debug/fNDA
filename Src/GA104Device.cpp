@@ -1003,9 +1003,14 @@ IOReturn GA104Device::bootGSP()
         uint32_t gspMb1 = readReg32(FALCON_MAILBOX1);
         IOLog("GA104: GSP after SEC2: CPUCTL=0x%08x BOOTVEC=0x%08x MB0=0x%08x MB1=0x%08x\n",
               gspCpuctl, gspBootvec, gspMb0, gspMb1);
-        IOLog("GA104: SEC2_DONE — GSP RISC-V BCR=0x%08x IRQSTAT=0x%08x\n",
+        uint32_t riscvCpuctl = readAbsReg32(0x00111388);
+        IOLog("GA104: SEC2_DONE — GSP RISC-V BCR=0x%08x IRQSTAT=0x%08x RISCV_CPUCTL=0x%08x\n",
               readReg32(FALCON_BCR_CTRL),
-              readReg32(FALCON_IRQSTAT));
+              readReg32(FALCON_IRQSTAT),
+              riscvCpuctl);
+        bool riscvActive = (riscvCpuctl & 0x80) != 0;
+        IOLog("GA104: RISC-V %s\n", riscvActive ? "ACTIVE ✅" : "NOT ACTIVE ❌");
+        setProperty("GA104_RISCV_ACTIVE", riscvActive);
 
         // SEC2 booted the GSP; ensure VRAM cmdq readPtr is reset to 0
         if (fVramCmdqEntryBase) {
@@ -1068,9 +1073,9 @@ IOReturn GA104Device::bootGSP()
             fCmdqTx->writePtr = wp;
             // Write writePtr to SHARED MEMORY (firmware reads from here, not from local copy)
             *(volatile uint32_t*)((uint8_t*)fShmBuf + fCmdqOff + 0x10) = wp;
-            // Also write to VRAM copy if applicable
+            // Also write to VRAM copy at the correct queue address
             if (fBar1Phys && fVramLayout.queuePhysAddr)
-                wrVRAM(0xC00000 + fCmdqOff + 0x10, &wp, 4);
+                wrVRAM(fVramLayout.queuePhysAddr + fCmdqOff + 0x10, &wp, 4);
             __sync_synchronize();
             IOLog("GA104: Pre-boot RPCs done (%u entries)\n", wp);
 
@@ -1127,11 +1132,10 @@ IOReturn GA104Device::bootGSP()
         setProperty("GA104_IRQSTAT_before", irq_before, 32);
         IOLog("GA104: IRQSTAT before doorbell=0x%08x\n", irq_before);
 
-        // Doorbell: escrever writePtr (não 0) para trigger
-        uint32_t dbVal = fCmdqTx ? fCmdqTx->writePtr : 2;
-        writeReg32(GSP_DOORBELL_REL, dbVal);
+        // Doorbell: NVIDIA usa QUEUE_HEAD = 0 (pulse, valor não importa)
+        writeReg32(GSP_DOORBELL_REL, 0);
         __sync_synchronize();
-        IOLog("GA104: Doorbell sent (value=%u)\n", dbVal);
+        IOLog("GA104: Doorbell sent (pulse)\n");
         uint32_t irq_after = readReg32(FALCON_IRQSTAT);     // using aliased offset (0x0008)
         setProperty("GA104_IRQSTAT_after", irq_after, 32);
         IOLog("GA104: IRQSTAT after doorbell=0x%08x (delta=0x%08x)\n", irq_after, irq_after ^ irq_before);
@@ -1205,11 +1209,9 @@ IOReturn GA104Device::bootGSP()
                 if (initDone) break;
             }
             
-            // Also check cmdq readPtr
-            if (cmdqRp > 0) {
-                IOLog("GA104: CMDQ processed after %dms! rPtr=%u\n", waitMs, cmdqRp);
-                break;
-            }
+            // Log cmdq readPtr progress but DON'T break — INIT_DONE comes after RM init
+            if (cmdqRp > 0 && (waitMs % 5000) == 0)
+                IOLog("GA104: CMDQ rPtr=%u (waiting for INIT_DONE)\n", cmdqRp);
         }
         setProperty("GA104_GSP_INIT_DONE_recv", initDone);
         
@@ -1296,11 +1298,10 @@ IOReturn GA104Device::bootGSP()
             IOLog("GA104: Pre-boot RPCs done (%u entries)\n", wp);
         }
 
-        // Doorbell via aliased offset — escrever writePtr (não 0) para detetar mudança
-        uint32_t dbVal = fCmdqTx ? fCmdqTx->writePtr : 2;
-        writeReg32(GSP_DOORBELL_REL, dbVal);
+        // Doorbell: NVIDIA usa QUEUE_HEAD = 0 (pulse)
+        writeReg32(GSP_DOORBELL_REL, 0);
         __sync_synchronize();
-        IOLog("GA104: Doorbell sent (value=%u)\n", dbVal);
+        IOLog("GA104: Doorbell sent (pulse)\n");
 
         // Poll for firmware response (60s)
         IOLog("GA104: Polling for INIT_DONE (60s)...\n");
@@ -1319,8 +1320,6 @@ IOReturn GA104Device::bootGSP()
                 }
                 if (initDone) break;
             }
-            uint32_t rp = *(volatile uint32_t*)((uint8_t*)fShmBuf + fCmdqOff + 0x20);
-            if (rp > 0) { IOLog("GA104: CMDQ processed at %dms\n", ms); break; }
         }
         setProperty("GA104_GSP_INIT_DONE_recv", initDone);
         uint32_t frp = 0, fwp = 0;
