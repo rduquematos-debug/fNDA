@@ -125,7 +125,27 @@ IOReturn GA104Framebuffer::getCurrentDisplayMode(IODisplayModeID *displayMode, I
 IOReturn GA104Framebuffer::setDisplayMode(IODisplayModeID displayMode, IOIndex depth)
 {
     if (displayMode != fCurrentModeID) return kIOReturnUnsupported;
+
+    IOLog("GA104FB: setDisplayMode mode=0x%x depth=%lu\n", (unsigned int)displayMode, (unsigned long)depth);
+
+    if (fDevice) {
+        uint32_t w = fWidth, h = fHeight;
+        // Decode width/height from mode ID (format: 0x8000WWWWxxxxHHHH)
+        if (displayMode & 0x80000000) {
+            w = (displayMode >> 16) & 0x7FFF;
+            h = displayMode & 0xFFFF;
+        }
+        if (w == 0 || h == 0) { w = fWidth; h = fHeight; }
+
+        IOReturn ret = fDevice->programHeadForMode(0, w, h, 60);
+        if (ret != kIOReturnSuccess) {
+            IOLog("GA104FB: programHeadForMode failed: 0x%x\n", ret);
+            return ret;
+        }
+    }
+
     fCurrentDepth = depth;
+    IOLog("GA104FB: setDisplayMode OK (%ux%u)\n", fWidth, fHeight);
     return kIOReturnSuccess;
 }
 
@@ -142,6 +162,12 @@ IOReturn GA104Framebuffer::getAttributeForConnection(
 
     switch (attribute) {
         case kConnectionFlags:
+            *value = 0;
+            return kIOReturnSuccess;
+        case kConnectionDisplayParameterCount:
+            *value = 0;
+            return kIOReturnSuccess;
+        case kConnectionDisplayParameters:
             *value = 0;
             return kIOReturnSuccess;
         default:

@@ -1,21 +1,10 @@
 #include "GA104FBProvider.hpp"
 #include "GA104Device.hpp"
+#include "GA104Framebuffer.hpp"
 #include <IOKit/IOLib.h>
 
 #define super IOService
 OSDefineMetaClassAndStructors(GA104FBProvider, IOService)
-
-static GA104Device *gDevRef = nullptr;
-
-static bool fbAppeared(void *target, void *refCon, IOService *newService, IONotifier *notifier)
-{
-    if (newService) {
-        newService->setProperty("IOFBProbeScore", 25001ULL, 32);
-        newService->setProperty("display-type", "NVIDIA");
-        IOLog("GA104FB: IONDRVFramebuffer properties set\n");
-    }
-    return true;
-}
 
 bool GA104FBProvider::init(GA104Device *device)
 {
@@ -34,8 +23,6 @@ bool GA104FBProvider::start(IOService *provider)
 {
     if (!super::start(provider)) return false;
 
-    gDevRef = fDevice;
-
     setProperty("IOFBProbeScore", 25001ULL, 32);
     setProperty("display-type", "NVIDIA");
     setProperty("device_type", "display");
@@ -53,29 +40,33 @@ bool GA104FBProvider::start(IOService *provider)
         setProperty("GA104BAR1Phys", fDevice->getBAR1Phys(), 64);
     }
 
-    registerService();
-
-    // Register notification for IONDRVFramebuffer (property injection only, no vtable/fVramMap)
-    OSDictionary *matching = IOService::serviceMatching("IONDRVFramebuffer");
-    if (matching) {
-        IOService::addMatchingNotification(gIOFirstMatchNotification, matching, fbAppeared, nullptr, nullptr);
-        OSIterator *iter = IOService::getMatchingServices(matching);
-        if (iter) {
-            OSObject *obj;
-            while ((obj = iter->getNextObject()))
-                fbAppeared(nullptr, nullptr, OSDynamicCast(IOService, obj), nullptr);
-            iter->release();
+    // Create GA104Framebuffer as child nub
+    GA104Framebuffer *fb = new GA104Framebuffer;
+    if (fb) {
+        uint32_t width = 1920, height = 1080;
+        uint64_t fbOffset = fDevice ? fDevice->getFramebufferAddr() : 0;
+        uint64_t fbSize = fDevice ? fDevice->getFramebufferSize() : (width * height * 4);
+        uint64_t fbPhys = (fDevice ? fDevice->getBAR1Phys() : 0) + fbOffset;
+        if (fb->init(fDevice, fbPhys, fbSize, width, height)) {
+            if (fb->attach(this)) {
+                fb->registerService();
+                IOLog("GA104FB: Framebuffer attached and registered\n");
+            } else {
+                IOLog("GA104FB: Framebuffer attach failed\n");
+                fb->release();
+            }
+        } else {
+            IOLog("GA104FB: Framebuffer init failed\n");
+            fb->release();
         }
-        matching->release();
     }
 
-    IOLog("GA104FBProvider: published as IOService\n");
+    IOLog("GA104FBProvider: started as IOService child of GA104Device\n");
     return true;
 }
 
 void GA104FBProvider::stop(IOService *provider)
 {
-    gDevRef = nullptr;
     super::stop(provider);
 }
 

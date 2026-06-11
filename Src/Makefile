@@ -1,9 +1,9 @@
 KEXT_NAME = GA104Driver
 KEXT_ID = com.nvidia.driver.GA104
 
-SRC = GA104Device.cpp GA104FBProvider.cpp GA104UserClient.cpp GSPFirmware.cpp GSPFirmwareParser.cpp GSPQueue.cpp GSPProtocol.cpp VBIOSDisplay.cpp KmodInfo.cpp
+SRC = GA104Device.cpp GA104FBProvider.cpp GA104Framebuffer.cpp GA104UserClient.cpp GSPFirmware.cpp GSPFirmwareParser.cpp GSPQueue.cpp GSPProtocol.cpp VBIOSDisplay.cpp KmodInfo.cpp
 OBJ = $(SRC:.cpp=.o)
-HDR = GA104Device.hpp GA104FBProvider.hpp GA104UserClient.hpp GSPFirmware.hpp GSPQueue.hpp GSPProtocol.hpp VBIOSDisplay.hpp
+HDR = GA104Device.hpp GA104FBProvider.hpp GA104Framebuffer.hpp GA104UserClient.hpp GSPFirmware.hpp GSPQueue.hpp GSPProtocol.hpp VBIOSDisplay.hpp
 
 SDKROOT = $(shell xcrun --show-sdk-path)
 SDK_FLAGS = -isysroot $(SDKROOT) -mmacosx-version-min=13.0
@@ -18,14 +18,10 @@ CXXFLAGS = -std=c++11 -c -Wall \
     -fno-rtti -fno-exceptions -fno-builtin \
     -mkernel -nostdlib
 
-FW_BIN = ../Resources/gsp_firmware.bin
 LDFLAGS = -Xlinker -kext -arch x86_64 \
     -nostdlib \
     -lkmod -lcc_kext \
     $(SDK_FLAGS)
-ifneq ($(wildcard $(FW_BIN)),)
-LDFLAGS += -sectcreate __DATA __gsp_firmware $(FW_BIN)
-endif
 
 KEXT_DIR = ../$(KEXT_NAME).kext
 KEXT_BIN = $(KEXT_DIR)/Contents/MacOS/$(KEXT_NAME)
@@ -46,13 +42,7 @@ $(KEXT_INFO): ../Info.plist
 
 resources:
 	mkdir -p $(KEXT_RESOURCES)
-	@if [ -f ../Resources/gsp_firmware.bin ]; then \
-		cp ../Resources/gsp_firmware.bin $(KEXT_RESOURCES)/; \
-		echo "GSP firmware copied to kext"; \
-	else \
-		echo "WARNING: gsp_firmware.bin not found in ../Resources/"; \
-		echo "Extract from NVIDIA driver: gsp_ga10x.bin -> Resources/gsp_firmware.bin"; \
-	fi
+	@echo "Resources ready (firmware loaded via userspace)"
 
 %.o: %.cpp $(HDR)
 	$(CXX) $(CXXFLAGS) -o $@ $<

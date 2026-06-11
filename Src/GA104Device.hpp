@@ -6,11 +6,12 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include "GA104Regs.h"
-#include "GA104FBProvider.hpp"
 #include "GSPFirmware.hpp"
 #include "GSPQueue.hpp"
 #include "GSPProtocol.hpp"
 #include "VBIOSDisplay.hpp"
+
+class GA104FBProvider;
 
 #define GA104_GSP_FW_SIZE       0x5000000
 
@@ -201,6 +202,7 @@ private:
     IOReturn legacyDisplayInit(void);
     IOReturn setupFramebuffer(void);
     IOReturn setupDisplayChannels(void);
+    IOReturn programHeadForMode(uint32_t head, uint32_t width, uint32_t height, uint32_t refreshHz);
 public:
     uint64_t getFramebufferAddr() const { return fFB.fbAddr; }
     uint64_t getFramebufferSize() const { return fFB.fbSize; }

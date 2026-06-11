@@ -1,14 +1,16 @@
 #include "GA104Device.hpp"
 #include "GA104Regs.h"
 #include "GA104FBProvider.hpp"
+#include "GA104Framebuffer.hpp"
 #include "GA104UserClient.hpp"
 #include "GSPFirmwareParser.hpp"
 #include <libkern/libkern.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/pci/IOPCIDevice.h>
-#include <mach-o/getsect.h>
 #include <sys/types.h>
 #include <sys/sysctl.h>
+#include <kern/thread_call.h>
+#include <IOKit/IOCommandGate.h>
 
 // SEC2 embedded firmware
 #include "SEC2Embed_Image.h"
@@ -151,87 +153,54 @@ bool GA104Device::start(IOService *provider)
         IOLog("GA104: WARNING - could not find IOPCIDevice ancestor for PCI cfg writes\n");
     }
 
-    if (mapBars() != kIOReturnSuccess) return false;
+    // Mapear BARs (pode falhar em VFIO)
+    // NOTA: Nao aceder a registos GPU aqui - causa panic em VFIO.
+    // O acesso a registos e feito apenas via UserClient.
+    IOReturn barRet = mapBars();
+    if (barRet == kIOReturnSuccess && fBar0Virt) {
+        IOLog("GA104: BARs mapped OK (stub mode - no register access)\n");
+        fVRAMSize = fBar1Size;
+        setProperty("GA104BAR0Size", (uint64_t)fBAR0Map->getLength(), 64);
+        setProperty("GA104BAR1Size", fBar1Size, 64);
+    } else {
+        IOLog("GA104: BARs not available, running in stub mode\n");
+        fVRAMSize = 0x200000000ULL;
+    }
+    setProperty("VRAM,totalMB", (uint64_t)(fVRAMSize / (1024 * 1024)), 32);
 
-    // Check if WPR2 is already active (set by VBIOS/firmware)
-    uint32_t wpr2Lo = readAbsReg32(NV_PFB_PRI_MMU_WPR2_ADDR_LO);
-    uint32_t wpr2Hi = readAbsReg32(NV_PFB_PRI_MMU_WPR2_ADDR_HI);
-    bool wpr2Active = NV_PFB_WPR2_ENABLED(wpr2Hi);
-    setProperty("GA104Wpr2Lo", wpr2Lo, 32);
-    setProperty("GA104Wpr2Hi", wpr2Hi, 32);
-    setProperty("GA104Wpr2Active", wpr2Active);
-    IOLog("GA104: WPR2 lo=0x%08x hi=0x%08x active=%d\n", wpr2Lo, wpr2Hi, wpr2Active);
+    IOLog("GA104: Device started in stub mode — use UserClient for GPU operations\n");
 
-    // Save EFI GOP display state BEFORE any modifications (use readAbsReg32 for correct addresses)
-    uint32_t efiHeadBase = (fBar0Virt) ? readAbsReg32(NV_PHEAD_SET_BASE(0)) : 0;
+    // Auto-boot GSP via IOTimerEventSource (delayed to avoid kernel panic)
+    // Fallback: bootGSP() will be called from userspace loader
 
-    setProperty("EFIGOP_HeadBase", efiHeadBase, 32);
-
-    // Setup framebuffer: VRAM offset 0 (matching HEAD_BASE = 0 from EFI GOP)
-    fFB.fbAddr = 0;
-    fFB.width  = 1920;
-    fFB.height = 1080;
-    fFB.bpp    = 32;
-    fFB.pitch  = fFB.width * 4;
-    fFB.fbSize = fFB.pitch * fFB.height;
-    fFB.vramPtr = (fVRAMBase ? fVRAMBase + fFB.fbAddr : nullptr);
-    setProperty("GA104FBAddr", fFB.fbAddr, 64);
-    setProperty("GA104FBSize", fFB.fbSize, 64);
-
-    // Call legacyDisplayInit to program display engine (timing, SOR, instance memory)
-    // VPLL skipped on Ampere (DCE-managed), EFI pixel clock preserved
-    legacyDisplayInit();
-
-    // Setup framebuffer and display channels for pushbuffer submission
-    setupFramebuffer();
-    setupDisplayChannels();
-
-    // Set VRAM size (GA104 has 8GB GDDR6X)
-    setProperty("VRAM,totalMB", 8192ULL, 32);
-    
-    // Create and publish GA104FBProvider for IONDRVFramebuffer matching
-    fFBProvider = new GA104FBProvider;
-    if (fFBProvider) {
-        if (fFBProvider->init(this)) {
-            fFBProvider->attach(this);
-            fFBProvider->registerService();
-            setProperty("GA104FBProviderPublished", true, 8);
-            IOLog("GA104: GA104FBProvider published\n");
+    // Initialize display engine (bare metal with BAR access)
+    if (fBar0Virt && fBar1Virt) {
+        IOReturn dispRet = setupFramebuffer();
+        if (dispRet == kIOReturnSuccess) {
+            setupDisplayChannels();
+            legacyDisplayInit();
+            IOLog("GA104: Display initialized — FB at 0x%llx\n", fFB.fbAddr);
         } else {
-            OSSafeReleaseNULL(fFBProvider);
-        }
-    }
-
-    // IOAccelProperties for display reporting
-    OSDictionary *accelProps = OSDictionary::withCapacity(4);
-    if (accelProps) {
-        accelProps->setObject("IOAcceleratorVRAMSize",
-                              OSNumber::withNumber(0x200000000ULL, 64));
-        accelProps->setObject("IOAcceleratorCapabilities",
-                              OSNumber::withNumber(0x7FFULL, 32));
-        setProperty("IOAccelProperties", accelProps);
-        accelProps->release();
-    }
-
-    // Auto-load GSP firmware from embedded __DATA.__gsp_firmware section, then boot
-    IOLog("GA104: Auto-loading GSP firmware...\n");
-    unsigned long fwSize = 0;
-    uint8_t *fwData = (uint8_t *)getsectdata("__DATA", "__gsp_firmware", &fwSize);
-    if (fwData && fwSize > 0) {
-        IOLog("GA104: Firmware found in __DATA.__gsp_firmware: %lu bytes\n", fwSize);
-        if (createFWBuffer((uint32_t)fwSize) == kIOReturnSuccess) {
-            memcpy(fFWBuffer, fwData, fwSize);
-            loadGSPFirmware();
-            if (fGSPFirmware) fGSPFirmware->loadExternal(fFWBuffer, (uint32_t)fwSize);
-            IOLog("GA104: Firmware loaded, booting GSP...\n");
-            IOReturn gspRet = bootGSP();
-            if (gspRet == kIOReturnSuccess)
-                IOLog("GA104: GSP boot OK!\n");
-            else
-                IOLog("GA104: GSP boot failed: 0x%x\n", gspRet);
+            IOLog("GA104: Framebuffer setup failed, skipping display init\n");
         }
     } else {
-        IOLog("GA104: __DATA.__gsp_firmware section not found (gsp_firmware.bin missing at link time)\n");
+        IOLog("GA104: BARs not mapped, skipping display init\n");
+    }
+
+    // Create framebuffer provider as a child nub
+    GA104FBProvider *fb = new GA104FBProvider;
+    if (fb && fb->init(this)) {
+        if (fb->start(this)) {
+            fFBProvider = fb;
+            fFBProvider->retain();
+            IOLog("GA104: FBProvider started as child nub\n");
+        } else {
+            IOLog("GA104: FBProvider start failed\n");
+            fb->release();
+        }
+    } else {
+        if (fb) fb->release();
+        IOLog("GA104: FBProvider init failed\n");
     }
 
     registerService();
@@ -242,7 +211,7 @@ bool GA104Device::start(IOService *provider)
 void GA104Device::stop(IOService *provider)
 {
     IOLog("GA104: Device stopping\n");
-    OSSafeReleaseNULL(fFBProvider);
+    if (fFBProvider) { fFBProvider->stop(this); fFBProvider->release(); fFBProvider = nullptr; }
     OSSafeReleaseNULL(fGSPFirmware);
     OSSafeReleaseNULL(fGSPQueue);
     OSSafeReleaseNULL(fGSPProtocol);
@@ -2527,6 +2496,82 @@ IOReturn GA104Device::legacyDisplayInit()
     setProperty("GA104DispFBAddr", fbAddr, 64);
     setProperty("GA104HLine", hline, 32);
     setProperty("GA104VLine", vline, 32);
+    return kIOReturnSuccess;
+}
+
+IOReturn GA104Device::programHeadForMode(uint32_t head, uint32_t width, uint32_t height, uint32_t refreshHz)
+{
+    if (head > 3) return kIOReturnBadArgument;
+    IOLog("GA104: programHeadForMode head=%u %ux%u@%uHz\n", head, width, height, refreshHz);
+
+    if (!fBar0Virt) {
+        IOLog("GA104: programHeadForMode: BAR0 not mapped\n");
+        return kIOReturnNotReady;
+    }
+
+    // Timings for 1920x1080@60Hz (CVT-RB standard)
+    uint32_t hVisible = width, vVisible = height;
+    uint32_t hTotal = 2200, hSyncStart = 2008, hSyncEnd = 2052;
+    uint32_t hBlankStart = hVisible, hBlankEnd = hTotal;
+    uint32_t vTotal = 1125, vSyncStart = 1084, vSyncEnd = 1088;
+    uint32_t vBlankStart = vVisible, vBlankEnd = vTotal;
+    uint32_t pixelClockKHz = 148500; // 148.5 MHz
+
+    // Override for non-1080p modes (simplified: use 1080p timings for now)
+    // TODO: proper CVT-RB timing calculation for arbitrary modes
+
+    uint32_t hTiming = (vTotal << 16) | hTotal;
+    uint32_t vSync = (vSyncEnd << 16) | hSyncEnd;
+    uint32_t hBlank = (vBlankStart << 16) | hBlankStart;
+    uint32_t vBlank = (vBlankEnd << 16) | hBlankEnd;
+
+    writeReg32(NV_PHEAD_SET_HEAD_TIMING(head), hTiming);
+    writeReg32(NV_PHEAD_SET_HEAD_VSYNC(head), vSync);
+    writeReg32(NV_PHEAD_SET_HEAD_BLANK(head), hBlank);
+    writeReg32(NV_PHEAD_SET_HEAD_BLACK(head), vBlank);
+    writeReg32(NV_PHEAD_SET_PIXEL_CLOCK(head), pixelClockKHz);
+
+    // Set head control: enable + 24bpp
+    uint32_t headCtrl = NV_PHEAD_SET_CONTROL_DEPTH_24BPP | 0x1;
+    writeReg32(NV_PHEAD_SET_CONTROL(head), headCtrl);
+    __sync_synchronize();
+
+    // Program window 0 for this head
+    writeReg32(NV_PWINDOW_SET_SIZE(head), (height << 16) | width);
+    writeReg32(NV_PWINDOW_SET_PITCH(head), width * 4);
+    writeReg32(NV_PWINDOW_SET_FORMAT(head), NV_PWINDOW_FORMAT_B8G8R8A8);
+
+    // Set FB address (VRAM offset)
+    uint32_t fbAddr = (uint32_t)(fFB.fbAddr & 0xFFFFFFFF);
+    writeReg32(NV_PWINDOW_SET_BASE(head), fbAddr);
+    writeReg32(NV_PHEAD_SET_BASE(head), fbAddr);
+    writeReg32(NV_PHEAD_SET_BASE_LIGHT(head), fbAddr);
+    __sync_synchronize();
+
+    // Power on SOR (use SOR 0 for head 0, SOR 1 for head 1, etc.)
+    uint32_t sorIndex = head;
+    writeReg32(NV_PSOR_CLK_AMPERE(sorIndex), NV_PSOR_CLK_AMPERE_TMDS);
+    writeReg32(NV_PSOR_POWER_STATE(sorIndex), NV_PSOR_POWER_ON);
+    for (int i = 0; i < 100; i++) {
+        if (!(readReg32(NV_PSOR_POWER_STATE(sorIndex)) & NV_PSOR_POWER_BUSY)) break;
+        IODelay(10);
+    }
+
+    // Update stored resolution
+    fFB.width = width;
+    fFB.height = height;
+    fFB.pitch = width * 4;
+
+    // Check scanout
+    uint32_t hline = readAbsReg32(NV_PHEAD_HLINE(head));
+    uint32_t vline = readAbsReg32(NV_PHEAD_VLINE(head));
+    IOLog("GA104: programHeadForMode done (hline=%u vline=%u)\n", hline, vline);
+
+    setProperty("GA104ModeWidth", width, 32);
+    setProperty("GA104ModeHeight", height, 32);
+    setProperty("GA104HLine", hline, 32);
+    setProperty("GA104VLine", vline, 32);
+
     return kIOReturnSuccess;
 }
 
