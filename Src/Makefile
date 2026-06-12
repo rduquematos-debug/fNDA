@@ -2,7 +2,7 @@ KEXT_NAME = GA104Driver
 KEXT_ID = com.nvidia.driver.GA104
 
 SRC = GA104Device.cpp GA104GSPBoot.cpp GA104GSPRPC.cpp GA104Display.cpp GA104FBProvider.cpp GA104Framebuffer.cpp GA104UserClient.cpp GSPFirmware.cpp GSPFirmwareParser.cpp GSPQueue.cpp GSPProtocol.cpp VBIOSDisplay.cpp KmodInfo.cpp fnda_nvkms_interface.cpp nvkms-rmapi.c \
-      nvidia/kernel_gsp_ga102.c \
+      nvidia/kernel_gsp_ga102.c nvidia/kernel_gsp_falcon_ga102.c \
       nvidia/stubs/ecc_stubs.c nvidia/stubs/nvlink_stubs.c \
       gsp/gsp_main.c gsp/gsp_obj.c
 OBJ = $(SRC:.cpp=.o)

@@ -145,25 +145,68 @@ typedef NvUPtr NvP64;
 
 // DRF_BASE: extract base from a register range definition
 #define DRF_BASE(drf)                       (drf##_LOW_FIELD)
-#define DRF_SHIFT(drf, field)               (drf##_##field##_SHIFT)
-#define DRF_MASK(drf, field)                (drf##_##field##_MASK)
-#define DRF_DEF(drf, field, val)            (((val) << DRF_SHIFT(drf, field)) & DRF_MASK(drf, field))
-#define FLD_SET_DRF_NUM(drf, field, val)    DRF_DEF(drf, field, val)
-#define DRF_NUM(drf, field, val)            DRF_DEF(drf, field, val)
+// NVIDIA DRF macros (nvmisc.h style) for kernel_gsp_falcon_ga102.c port
+// DRF_SHIFT: drf_name → drf_name_SHIFT  e.g., NV_PFALCON_FALCON_DMATRFCMD_FULL → NV_PFALCON_FALCON_DMATRFCMD_FULL_SHIFT
+#define DRF_SHIFT(drf)      (drf##_SHIFT)
+#define DRF_MASK(drf)       (drf##_MASK)
+#define DRF_SHIFTMASK(drf)  (DRF_MASK(drf) << (DRF_SHIFT(drf)))
+
+// DRF_DEF(prefix, reg, field, valname) → turned into value shifted by field shift
+// Example: DRF_DEF(NV_ or _, FALCON_DMATRFCMD, FULL, FALSE) → (NV_PFALCON_FALCON_DMATRFCMD_FULL_FALSE << SHIFT) & MASK
+#define DRF_DEF_FULL(p,r,f,v)   (((NvU32)(p##r##f##v)) << DRF_SHIFT(p##r##f))
+
+// DRF_NUM(prefix, reg, field, num) → numeric value shifted by field shift  
+// Example: DRF_NUM(NV_PFALCON_, FALCON_DMATRFMOFFS, OFFS, dest) → ((dest) << SHIFT) & MASK
+#define DRF_NUM_FULL(p,r,f,n)   (((NvU32)(n)) << DRF_SHIFT(p##r##f))
+
+// 4-arg versions used by the falcon file (with _underscore prefix)
+// DRF_DEF(_PFALCON, _FALCON_DMATRFCMD, _FULL, _FALSE) → NV_PFALCON_FALCON_DMATRFCMD_FULL_FALSE shifted
+#define _DRF_VAL(name)          NV##name
+#define _DRF_SHIFT(name)        (NV##name##_SHIFT)
+#define _DRF_MASK(name)         (NV##name##_MASK)
+#define DRF_DEF(d,r,f,v)        (((NvU32)(_DRF_VAL(d##r##f##v))) << _DRF_SHIFT(d##r##f))
+#define DRF_NUM(d,r,f,n)        (((NvU32)(n)) << _DRF_SHIFT(d##r##f))
+
+// 5-arg FLD_SET macros used by the falcon file
+#define FLD_SET_DRF_NUM(d,r,f,v,dw)  (((dw) & ~_DRF_MASK(d##r##f)) | DRF_NUM(d,r,f,v))
+#define FLD_SET_DRF(d,r,f,c,dw)     (((dw) & ~_DRF_MASK(d##r##f)) | DRF_DEF(d,r,f,c))
+#define FLD_SET_DRF_MOD(m,d,r,f,c,dw) FLD_SET_DRF(d,r,f,c,dw)
 
 // Register field helper macros (NVIDIA DRF = Device Register Field)
 
 // Falcon v4 register ADDRESSES (offsets from Falcon regBase)
+#define NV_PFALCON_FALCON_IRQSCLR                       0x00000004
+#define NV_PFALCON_FALCON_IRQSTAT                       0x00000008
+#define NV_PFALCON_FALCON_IRQMSET                       0x00000010
+#define NV_PFALCON_FALCON_IRQDEST                       0x0000001c
+#define NV_PFALCON_FALCON_MAILBOX0                      0x00000040
+#define NV_PFALCON_FALCON_MAILBOX1                      0x00000044
+#define NV_PFALCON_FALCON_DMACTL                        0x0000010c
 #define NV_PFALCON_FALCON_DMATRFBASE                    0x00000110
 #define NV_PFALCON_FALCON_DMATRFBASE1                   0x00000128
 #define NV_PFALCON_FALCON_DMATRFMOFFS                   0x00000114
 #define NV_PFALCON_FALCON_DMATRFFBOFFS                  0x0000011c
 #define NV_PFALCON_FALCON_DMATRFCMD                     0x00000118
 #define NV_PFALCON_FALCON_BOOTVEC                       0x00000104
+#define NV_PFALCON_FBIF_TRANSCFG(i)                     (0x00000000 + (i) * 4)
+#define NV_PFALCON_FBIF_CTL                             0x00000024
 #define NV_FALCON2_GSP_BASE                             0x00111000
 
-// DMA poll mode
-#define FLCN_DMA_POLL_QUEUE_NOT_FULL    0
+// FBIF field values used by kernel_gsp_falcon_ga102.c
+#define NV_PFALCON_FBIF_TRANSCFG_ENGINE_ID_FLAG_BAR2_FN0 0x00000000U
+
+// RISC-V BROM field values
+#define NV_PFALCON2_FALCON_MOD_SEL_ALGO_SHIFT            0
+#define NV_PFALCON2_FALCON_MOD_SEL_ALGO_MASK             0x000000FFU
+#define NV_PFALCON2_FALCON_MOD_SEL_ALGO_RSA3K           0x00000001U
+
+// Address translation types for memdescGetPhysAddr
+#define AT_GPU          0
+#define AT_SYSTEM       1
+
+// DMA poll mode (cast to FlcnDmaPollMode for C++ function calls)
+#define FLCN_DMA_POLL_QUEUE_NOT_FULL    ((FlcnDmaPollMode)0)
+#define FLCN_DMA_POLL_ENGINE_IDLE       ((FlcnDmaPollMode)1)
 typedef enum {
     FLCN_DMA_POLL_MODE_IDLE = 0,
     FLCN_DMA_POLL_MODE_FULL = 1
@@ -240,18 +283,6 @@ typedef enum {
 // DRF macros — match NVIDIA nvmisc.h conventions
 // DRF_SHIFT extracts field bit position from NV define
 // DRF_MASK extracts field width mask
-#define DRF_SHIFT(drf)      (drf##_SHIFT)
-#define DRF_MASK(drf)       (drf##_MASK)
-#define DRF_NUM_MOD(d,r,f,n)  (((NvU32)(n)) << DRF_SHIFT(NV##d##r##f))
-#define DRF_DEF(d,r,f,c)    (((NvU32)(NV##d##r##f##c)) << DRF_SHIFT(NV##d##r##f))
-#define DRF_SHIFTMASK(drf)  (DRF_MASK(drf) << (DRF_SHIFT(drf)))
-#define FLD_SET_DRF_MOD(mod, dev, reg, field, val, dword) \
-    (((dword) & ~(DRF_SHIFTMASK(NV##mod##dev##reg##field))) | DRF_DEF(mod, dev, reg, field, val))
-#define FLD_SET_DRF_NUM(mod, dev, reg, field, val, dword) \
-    (((dword) & ~(DRF_SHIFTMASK(NV##mod##dev##reg##field))) | DRF_NUM_MOD(mod, dev, reg, field, val))
-#define FLD_SET_DRF(d,r,f,c,v)  FLD_SET_DRF_MOD(d,r,f,c,v)
-#define GPU_REG_RD32_NV(pGpu, d, r, f) 0  // stub for register field reads
-
 // Confidential Compute stub (needed by nvidia/*.c ports)
 #define PDB_PROP_CONFCOMPUTE_CC_FEATURE_ENABLED         0x1
 struct ConfidentialCompute {
@@ -617,6 +648,7 @@ typedef struct KernelFalcon {
     OBJGPU      *pGpu;
     NvU32        regBase;            // e.g., NV_PGSP_BASE = 0x110000
     NvU32        riscvRegBase;       // e.g., NV_FALCON2_GSP_BASE = 0x111000
+    NvU32        fbifBase;           // FBIF base (for TRANSCFG access)
     NvBool       bBootFromHs;        // TRUE for GA102/GA104
     NvU32        physEngDesc;        // ENG_GSP or ENG_SEC2
 } KernelFalcon;
@@ -627,13 +659,43 @@ typedef struct KernelSec2 {
 } KernelSec2;
 
 // GSP booter ucode descriptor (from kernel_gsp_booter.c)
-typedef struct KernelGspFlcnUcode {
-    NvU32         bootType;           // KGSP_FLCN_UCODE_BOOT_FROM_HS etc.
+// KernelGspFlcnUcodeBootFromHs — ucode loaded from HS binary
+typedef struct {
+    MEMORY_DESCRIPTOR   *pUcodeMemDesc;
+    NvU32                codeOffset;
+    NvU32                dataOffset;
+    NvU32                imemVa;
+    NvU32                imemPa;
+    NvU32                imemSize;
+    NvU32                dmemVa;
+    NvU32                dmemPa;
+    NvU32                dmemSize;
+    NvU32                hsSigDmemAddr;
+    NvU32                engineIdMask;
+    NvU32                ucodeId;
+} KernelGspFlcnUcodeBootFromHs;
+
+// GspLoadExecHsBinaryParams — parameter struct for kgspLoadAndExecuteHsBinary_GA102
+typedef struct {
     MEMORY_DESCRIPTOR *pUcodeMemDesc;
-    NvU64         imemVa;             // IMEM virtual address (for BOOTVEC)
-    NvU32         hsSigDmemAddr;      // DMEM offset of PKC signature
-    NvU32         engineIdMask;
-    NvU32         ucodeId;
+    NvU32              ucodeImemPA;
+    NvU32              ucodeImemVA;
+    NvU32              imemPhysAddr;
+    NvU32              ucodeImemSize;
+    NvU32              ucodeDmemPA;
+    NvU32              ucodeDmemVA;
+    NvU32              dmemPhysAddr;
+    NvU32              ucodeDmemSize;
+    NvU32              hsSigDmemAddr;
+    NvU32              engineIdMask;
+    NvU32              ucodeId;
+} GspLoadExecHsBinaryParams;
+
+typedef struct KernelGspFlcnUcode {
+    NvU32 bootType;             // KGSP_FLCN_UCODE_BOOT_FROM_HS etc.
+    union {
+        KernelGspFlcnUcodeBootFromHs ucodeBootFromHs;
+    };
 } KernelGspFlcnUcode;
 
 #define KGSP_FLCN_UCODE_BOOT_FROM_HS       0
@@ -690,26 +752,28 @@ typedef struct KernelGsp {
 
 // Falcon engine control helpers
 #define kflcnReset_HAL(pGpu, pFlcn) \
-    do { \
+    ({ \
         NvU32 _eng = kflcnRegRead_HAL(pGpu, pFlcn, 0x03C0); \
         kflcnRegWrite_HAL(pGpu, pFlcn, 0x03C0, _eng | 0x01); \
         IODelay(10); \
         kflcnRegWrite_HAL(pGpu, pFlcn, 0x03C0, _eng & ~0x01); \
         IODelay(10); \
-    } while(0)
+        NV_OK; \
+    })
 
 #define kflcnStartCpu_HAL(pGpu, pFlcn) \
     kflcnRegWrite_HAL(pGpu, pFlcn, 0x0100, 0x02)  // CPUCTL = STARTCPU
 
 #define kflcnWaitForHalt_HAL(pGpu, pFlcn, timeout, seq) \
-    do { \
-        NvU32 _cpuctl; \
+    ({ \
+        NvU32 _cpuctl = 0; \
         for (int _wi = 0; _wi < 5000; _wi++) { \
             _cpuctl = kflcnRegRead_HAL(pGpu, pFlcn, 0x0100); \
             if (_cpuctl & 0x10) break; \
             IODelay(2); \
         } \
-    } while(0)
+        (_cpuctl & 0x10) ? NV_OK : NV_ERR_TIMEOUT; \
+    })
 
 #define kflcnSetRiscvMode(b)                   ((void)0)
 #define kflcnIsRiscvActive_HAL(pGpu, pFlcn)    (NV_TRUE)
