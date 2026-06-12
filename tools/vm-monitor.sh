@@ -2,8 +2,9 @@
 # Shell interactiva no monitor QEMU
 # USO: ./vm-monitor.sh [comando]
 
-MONITOR="/mnt/sda1/vm/macos-ventura/macos-ventura-monitor.socket"
-[ -S "$MONITOR" ] || MONITOR="/mnt/sda1/vm/macos-ventura/monitor.socket"
+VM_DIR="${VM_DIR:-/path/to/vm/macos-ventura}"
+MONITOR="$VM_DIR/macos-ventura-monitor.socket"
+[ -S "$MONITOR" ] || MONITOR="$VM_DIR/monitor.socket"
 [ -S "$MONITOR" ] || { echo "❌ VM não está a correr"; exit 1; }
 
 if [ -n "$1" ]; then

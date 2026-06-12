@@ -13,3 +13,14 @@ OVMF_*
 macos-ventura.sh
 macos-ventura/
 serial.log
+
+# Local config overrides
+tools/vm-config.local.sh
+*.local
+
+# IDE / OS files
+.DS_Store
+.vscode/
+.idea/
+
+

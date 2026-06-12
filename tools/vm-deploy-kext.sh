@@ -2,7 +2,7 @@
 # Copiar GA104Driver.kext compilado para EFI/OC/Kexts/
 # USO: ./vm-deploy-kext.sh
 
-KEXT_SRC="/home/rafaelm/Público/fNDA/GA104Driver.kext"
+KEXT_SRC="$(cd "$(dirname "$0")/.." && pwd)/GA104Driver.kext"
 KEXT_DST="/mnt/EFI/OC/Kexts/GA104Driver.kext"
 
 # Verificar se o kext existe e tem Info.plist

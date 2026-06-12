@@ -2,7 +2,8 @@
 # tail -f do serial log
 # USO: ./vm-serial.sh
 
-SERIAL="/mnt/sda1/vm/macos-ventura/serial.log"
+VM_DIR="${VM_DIR:-/path/to/vm/macos-ventura}"
+SERIAL="$VM_DIR/serial.log"
 [ -f "$SERIAL" ] || { echo "❌ Serial log não encontrado"; exit 1; }
 
 echo "📋 A monitorizar: $SERIAL"

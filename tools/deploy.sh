@@ -4,10 +4,11 @@
 
 set -e
 
-PROJECT="/home/rafaelm/Público/fNDA"
+PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
 TOOLS="$PROJECT/tools"
 SRC="$PROJECT/Src"
-VM_SSH="rafa@localhost -p 22220"
+VM_SSH="${VM_SSH:-user@localhost -p 22220}"
+VM_PASS="${VM_PASS:-}"
 
 die() { echo "❌ $1"; exit 1; }
 info() { echo "✅ $1"; }
@@ -15,24 +16,24 @@ info() { echo "✅ $1"; }
 case "${1:-all}" in
     vm|all)
         echo "=== 1. Copiar source para VM ==="
-        sshpass -p 'rafa' scp -P 22220 $SRC/*.cpp $SRC/*.hpp $VM_SSH:~/fNDA/Src/ 2>/dev/null || die "SCP failed"
-        sshpass -p 'rafa' scp -P 22220 $PROJECT/Info.plist $VM_SSH:~/fNDA/ 2>/dev/null
+        scp -P 22220 $SRC/*.cpp $SRC/*.hpp $VM_SSH:~/fNDA/Src/ 2>/dev/null || die "SCP failed"
+        scp -P 22220 $PROJECT/Info.plist $VM_SSH:~/fNDA/ 2>/dev/null
         info "Source copied"
 
         echo "=== 2. Compilar na VM ==="
-        sshpass -p 'rafa' ssh $VM_SSH "cd ~/fNDA/Src && make clean 2>&1 && make all 2>&1" || die "Compile failed"
+        ssh $VM_SSH "cd ~/fNDA/Src && make clean 2>&1 && make all 2>&1" || die "Compile failed"
         info "Kext compiled"
 
         echo "=== 3. Copiar kext compilado para projeto ==="
-        sshpass -p 'rafa' scp -P 22220 -r $VM_SSH:~/fNDA/GA104Driver.kext $PROJECT/ 2>/dev/null
+        scp -P 22220 -r $VM_SSH:~/fNDA/GA104Driver.kext $PROJECT/ 2>/dev/null
         info "Kext copied to project ($(stat -c%s $PROJECT/GA104Driver.kext/Contents/MacOS/GA104Driver) bytes)"
         ;;
 esac
 
 case "${1:-all}" in
     pen|all)
-        PEN_DEV="/dev/sdd"
-        PEN_MNT="/media/pen"
+        PEN_DEV="${PEN_DEV:-/dev/sdX}"
+        PEN_MNT="${PEN_MNT:-/mnt/pen}"
 
         echo "=== 4. Deploy para PEN ==="
         if [ -b "$PEN_DEV" ]; then
@@ -63,7 +64,7 @@ case "${1:-all}" in
     all)
         echo "   ./vm-boot-vfio.sh     # Boot VM VFIO"
         echo "   bash vm-monitor.sh \"sendkey ret\"  # Se preso no picker"
-        echo "   ssh rafa@localhost -p 22220 \"ioreg -l -w0 -r -c GA104Framebuffer\""
+        echo "   ssh \$VM_SSH \"ioreg -l -w0 -r -c GA104Framebuffer\""
         ;;
     vm)
         echo "   ./vm-boot-vfio.sh"

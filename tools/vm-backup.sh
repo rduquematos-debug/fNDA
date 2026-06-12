@@ -2,8 +2,9 @@
 # Backup do disco da VM
 # USO: ./vm-backup.sh
 
-DISK="/mnt/sda1/vm/macos-ventura/disk.qcow2"
-CLEAN="/mnt/sda1/vm/macos-ventura/disk.qcow2.clean"
+VM_DIR="${VM_DIR:-/path/to/vm/macos-ventura}"
+DISK="$VM_DIR/disk.qcow2"
+CLEAN="$VM_DIR/disk.qcow2.clean"
 
 [ -f "$DISK" ] || { echo "❌ disco não encontrado: $DISK"; exit 1; }
 

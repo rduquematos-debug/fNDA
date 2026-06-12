@@ -2,8 +2,9 @@
 # Restaurar backup do disco
 # USO: ./vm-restore.sh
 
-DISK="/mnt/sda1/vm/macos-ventura/disk.qcow2"
-CLEAN="/mnt/sda1/vm/macos-ventura/disk.qcow2.clean"
+VM_DIR="${VM_DIR:-/path/to/vm/macos-ventura}"
+DISK="$VM_DIR/disk.qcow2"
+CLEAN="$VM_DIR/disk.qcow2.clean"
 
 [ -f "$CLEAN" ] || { echo "❌ Backup não encontrado: $CLEAN"; exit 1; }
 

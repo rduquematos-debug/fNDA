@@ -2,9 +2,10 @@
 # Montar/desmontar OpenCore.qcow2 via NBD
 # USO: ./vm-mount-opencore.sh mount|umount
 
-NBD="/dev/nbd0"
-EFI_MNT="/mnt"
-OPEN_CORE="/mnt/sda1/vm/macos-ventura/OpenCore.qcow2"
+NBD="${NBD_DEV:-/dev/nbd0}"
+EFI_MNT="${EFI_MNT:-/mnt/efi}"
+VM_DIR="${VM_DIR:-/path/to/vm/macos-ventura}"
+OPEN_CORE="$VM_DIR/OpenCore.qcow2"
 
 case "$1" in
     mount)
@@ -18,7 +19,7 @@ case "$1" in
             exit 1
         }
         sleep 2
-        sudo mount ${NBD}p1 $EFI_MNT 2>/dev/null || {
+        sudo mount "${NBD}p1" $EFI_MNT 2>/dev/null || {
             echo "❌ Falha ao montar partição EFI"
             sudo qemu-nbd -d $NBD 2>/dev/null
             exit 1

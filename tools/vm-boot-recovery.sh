@@ -2,10 +2,11 @@
 # Boot só RecoveryImage (sem disco do sistema)
 # USO: ./vm-boot-recovery.sh
 
+VM_DIR="${VM_DIR:-/path/to/vm/macos-ventura}"
+
 ./vm-kill.sh 2>/dev/null
 
-VM_DIR="/mnt/sda1/vm/macos-ventura"
-cd /mnt/sda1/vm
+cd "$(dirname "$VM_DIR")"
 sudo rm -f $VM_DIR/monitor.socket
 sudo bash -c 'echo "" > $VM_DIR/serial.log && chmod 666 $VM_DIR/serial.log'
 
@@ -33,8 +34,8 @@ nohup /usr/bin/qemu-system-x86_64 \
     -drive id=BootLoader,if=none,format=qcow2,file=$VM_DIR/OpenCore.qcow2 \
     -device ide-hd,bus=ahci.1,drive=RecoveryImage \
     -drive id=RecoveryImage,if=none,format=raw,file=$VM_DIR/RecoveryImage.img \
-    -fsdev local,id=fsdev0,path=/home/rafaelm/Público,security_model=mapped-xattr \
-    -device virtio-9p-pci,fsdev=fsdev0,mount_tag=Public-rafaelm \
+    -fsdev local,id=fsdev0,path="${SHARE_DIR:-/path/to/share}",security_model=mapped-xattr \
+    -device virtio-9p-pci,fsdev=fsdev0,mount_tag=Public-share \
     -monitor unix:$VM_DIR/monitor.socket,server,nowait \
     -serial file:$VM_DIR/serial.log > /dev/null 2>&1 &
 

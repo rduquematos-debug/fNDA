@@ -2,10 +2,11 @@
 # Boot VFIO com GPU real (RTX 3070 Ti)
 # USO: ./vm-boot-vfio.sh
 
+VM_DIR="${VM_DIR:-/path/to/vm/macos-ventura}"
+
 ./vm-kill.sh 2>/dev/null
 
-VM_DIR="/mnt/sda1/vm/macos-ventura"
-cd /mnt/sda1/vm
+cd "$(dirname "$VM_DIR")"
 sudo rm -f $VM_DIR/monitor.socket
 sudo bash -c 'echo "" > $VM_DIR/serial.log && chmod 666 $VM_DIR/serial.log'
 
@@ -38,7 +39,7 @@ sudo nohup /usr/bin/qemu-system-x86_64 \
     -audiodev spice,id=audio0 \
     -device virtio-sound-pci,audiodev=audio0 \
     -device virtio-net-pci,netdev=nic \
-    -netdev user,hostname=macos-ventura,hostfwd=tcp::22220-:22,smb=/home/rafaelm/Público,id=nic \
+    -netdev user,hostname=macos-ventura,hostfwd=tcp::22220-:22,smb="${SHARE_DIR:-/path/to/share}",id=nic \
     -global driver=cfi.pflash01,property=secure,value=on \
     -drive if=pflash,format=raw,unit=0,file=$VM_DIR/OVMF_CODE.4m.fd,readonly=on \
     -drive if=pflash,format=raw,unit=1,file=$VM_DIR/OVMF_VARS.4m.fd \
@@ -49,8 +50,8 @@ sudo nohup /usr/bin/qemu-system-x86_64 \
     -drive id=RecoveryImage,if=none,format=raw,file=$VM_DIR/RecoveryImage.img \
     -device virtio-blk-pci,drive=SystemDisk \
     -drive id=SystemDisk,if=none,format=qcow2,file=$VM_DIR/disk.qcow2 \
-    -fsdev local,id=fsdev0,path=/home/rafaelm/Público,security_model=mapped-xattr \
-    -device virtio-9p-pci,fsdev=fsdev0,mount_tag=Public-rafaelm \
+    -fsdev local,id=fsdev0,path="${SHARE_DIR:-/path/to/share}",security_model=mapped-xattr \
+    -device virtio-9p-pci,fsdev=fsdev0,mount_tag=Public-share \
     -monitor unix:$VM_DIR/macos-ventura-monitor.socket,server,nowait \
     -serial file:$VM_DIR/serial.log < /dev/null > /dev/null 2>&1 &
 
