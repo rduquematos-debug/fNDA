@@ -76,6 +76,7 @@ public:
     IOReturn sendGspRpcDfpGetInfo(uint32_t displayId);
     IOReturn sendGspRpcOrAssign(uint32_t displayId, uint32_t sorIndex, uint32_t protocol);
     IOReturn sendGspRpcHeadSetTimings(uint32_t head, uint32_t width, uint32_t height, uint32_t refreshHz);
+    IOReturn sendGspRpcHeadSetTimings(uint32_t head, const GSPModesetParams *params);
     IOReturn sendGspRpcFlip(uint32_t head);
     IOReturn fillFramebuffer(uint32_t color);
     IOReturn programVPLL(void);

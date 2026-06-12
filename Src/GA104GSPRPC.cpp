@@ -248,8 +248,6 @@ IOReturn GA104Device::sendGspRpcOrAssign(uint32_t displayId, uint32_t sorIndex, 
 IOReturn GA104Device::sendGspRpcHeadSetTimings(uint32_t head, uint32_t width,
                                                 uint32_t height, uint32_t refreshHz)
 {
-    if (!fGSPProtocol || !fRmDisp) return kIOReturnNotReady;
-
     GSPModesetParams params;
     bzero(&params, sizeof(params));
     params.headIndex = head;
@@ -260,33 +258,43 @@ IOReturn GA104Device::sendGspRpcHeadSetTimings(uint32_t head, uint32_t width,
     params.bpp = 32;
     params.pitch = width * 4;
     params.framebufferAddr = fFB.fbAddr;
-
-    // Timings for 1920x1080@60
-    params.hTotal = TIMING_1920x1080_60_HTOTAL;
-    params.vTotal = TIMING_1920x1080_60_VTOTAL;
-    params.hSyncStart = TIMING_1920x1080_60_HSYNC_START;
-    params.hSyncEnd = TIMING_1920x1080_60_HSYNC_END;
-    params.vSyncStart = TIMING_1920x1080_60_VSYNC_START;
-    params.vSyncEnd = TIMING_1920x1080_60_VSYNC_END;
-    params.hBlankStart = TIMING_1920x1080_60_HBLANK_START;
-    params.hBlankEnd = TIMING_1920x1080_60_HBLANK_END;
-    params.vBlankStart = TIMING_1920x1080_60_VBLANK_START;
-    params.vBlankEnd = TIMING_1920x1080_60_VBLANK_END;
-    params.clockKHz = TIMING_1920x1080_60_PCLOCK_KHZ;
     params.colorFormat = NV_PWINDOW_FORMAT_B8G8R8A8;
+
+    // CVT-RB timings for this resolution
+    params.hTotal = width + 280;
+    params.vTotal = height + 45;
+    params.hSyncStart = width + 88;
+    params.hSyncEnd = width + 132;
+    params.vSyncStart = height + 4;
+    params.vSyncEnd = height + 8;
+    params.hBlankStart = width;
+    params.hBlankEnd = width + 280;
+    params.vBlankStart = height;
+    params.vBlankEnd = height + 45;
+    params.clockKHz = (uint32_t)(width * height * refreshHz * 1.05f / 1000000) * 1000;
+    if (params.clockKHz < 25000) params.clockKHz = 148500;
+
+    return sendGspRpcHeadSetTimings(head, &params);
+}
+
+IOReturn GA104Device::sendGspRpcHeadSetTimings(uint32_t head,
+                                                const GSPModesetParams *params)
+{
+    if (!fGSPProtocol || !fRmSubdevice || !params) return kIOReturnBadArgument;
 
     GspRpcMessageHeader msg, reply;
     uint32_t replySz = 0;
     bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
 
-    fGSPProtocol->buildHeadSetTimings(&msg, fRmSubdevice, head, &params);
+    fGSPProtocol->buildHeadSetTimings(&msg, fRmSubdevice, head, params);
     uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
     IOReturn ret = sendGspRpc(&msg,
         (uint8_t*)&msg + sizeof(GspRpcMessageHeader),
         payloadSz, &reply, sizeof(reply), &replySz, 10000);
 
     if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
-        IOLog("GA104: Head %u timings set: %ux%u@%u\n", head, width, height, refreshHz);
+        IOLog("GA104: Head %u timings set: %ux%u@%u (pclk=%u)\n",
+              head, params->width, params->height, params->refreshHz, params->clockKHz);
         return kIOReturnSuccess;
     }
     return ret == kIOReturnSuccess ? kIOReturnError : ret;

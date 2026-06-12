@@ -217,8 +217,32 @@ IOReturn GA104Framebuffer::setDisplayMode(IODisplayModeID displayMode, IOIndex d
     IOLog("GA104FB: setDisplayMode %ux%u@%u depth=%lu\n", w, h, refresh, (unsigned long)depth);
 
     if (fDevice) {
-        // Try GSP RPC display pipeline first (preferred path)
-        IOReturn gspRet = fDevice->sendGspRpcHeadSetTimings(0, w, h, refresh);
+        IOReturn gspRet;
+        if (idx >= 0 && fModes[idx].pixelClock > 0) {
+            // Use real EDID timings
+            GSPModesetParams p;
+            bzero(&p, sizeof(p));
+            p.headIndex = 0; p.sorIndex = 0;
+            p.width = w; p.height = h; p.refreshHz = refresh;
+            p.bpp = 32; p.pitch = w * 4;
+            p.framebufferAddr = fDevice->getFramebufferAddr();
+            p.hTotal = fModes[idx].hTotal;
+            p.vTotal = fModes[idx].vTotal;
+            p.hSyncStart = fModes[idx].hSyncStart;
+            p.hSyncEnd = fModes[idx].hSyncEnd;
+            p.vSyncStart = fModes[idx].vSyncStart;
+            p.vSyncEnd = fModes[idx].vSyncEnd;
+            p.hBlankStart = fModes[idx].hBlankStart;
+            p.hBlankEnd = fModes[idx].hBlankEnd;
+            p.vBlankStart = fModes[idx].vBlankStart;
+            p.vBlankEnd = fModes[idx].vBlankEnd;
+            p.clockKHz = fModes[idx].pixelClock / 1000;
+            p.colorFormat = NV_PWINDOW_FORMAT_B8G8R8A8;
+            gspRet = fDevice->sendGspRpcHeadSetTimings(0, &p);
+        } else {
+            // Legacy fallback: use auto-computed timings
+            gspRet = fDevice->sendGspRpcHeadSetTimings(0, w, h, refresh);
+        }
         if (gspRet == kIOReturnSuccess) {
             fDevice->sendGspRpcFlip(0);
         } else {
