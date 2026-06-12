@@ -26,7 +26,7 @@
  * execution of Falcon cores.
  */
 
-#include "../../os_compat.h"
+#include "../os_compat.h"
 
 // Original NVIDIA includes replaced by os_compat.h:
 //   gpu/gsp/kernel_gsp.h, gpu/gpu.h, kernel_falcon.h, rmgspseq.h,

@@ -1,4 +1,5 @@
 #include "gsp_obj.h"
+#include "../GA104Device.hpp"
 #include <IOKit/IOLib.h>
 
 NV_STATUS gsp_obj_init(OBJGPU *pGpu, GA104Device *device)

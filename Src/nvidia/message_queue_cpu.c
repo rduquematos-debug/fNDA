@@ -28,7 +28,7 @@
 // Byte-for-byte port: NVIDIA includes replaced by os_compat.h
 // Original: core/core.h, os/os.h, vgpu/rpc_headers.h, g_rpc-structures.h,
 //           mctp_format.h, nvdm_format.h, message_queue.h, kernel_gsp.h, etc.
-#include "../../os_compat.h"
+#include "../os_compat.h"
 #include "gpu/gsp/kernel_gsp.h"
 #include "nvrm_registry.h"
 #include "gpu/conf_compute/ccsl.h"

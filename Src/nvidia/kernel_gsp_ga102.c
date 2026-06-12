@@ -25,7 +25,7 @@
  * Provides GA102+ specific KernelGsp HAL implementations.
  */
 
-#include "../../os_compat.h"
+#include "../os_compat.h"
 
 // Original NVIDIA includes replaced by os_compat.h:
 //   gpu/gsp/kernel_gsp.h, conf_compute.h, rm_page_size.h, nverror.h,

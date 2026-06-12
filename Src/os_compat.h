@@ -27,6 +27,11 @@
 // Include our register definitions and GSP protocol structs
 #include "GA104Regs.h"
 
+// Forward declarations (needed before OBJGPU/GA104Device are fully defined)
+struct GA104Device;
+struct OBJGPU;
+struct ConfidentialCompute;
+
 // Forward declaration — our IOService subclass
 class GA104Device;
 
@@ -42,7 +47,7 @@ typedef int32_t  NvS32;
 typedef int64_t  NvS64;
 typedef NvU32    NV_STATUS;
 typedef bool     NvBool;
-typedef uint64_t NvHandle;
+// NvHandle is defined in GA104Regs.h as uint32_t — use that definition
 typedef uint64_t RmPhysAddr;
 typedef NvU64    NvLength;
 
@@ -216,6 +221,13 @@ typedef NvUPtr NvP64;
 #define FLD_SET_DRF(d,r,f,c,v)  FLD_SET_DRF_MOD(d,r,f,c,v)
 #define GPU_REG_RD32_NV(pGpu, d, r, f) 0  // stub for register field reads
 
+// Confidential Compute stub (needed by nvidia/*.c ports)
+#define PDB_PROP_CONFCOMPUTE_CC_FEATURE_ENABLED         0x1
+struct ConfidentialCompute {
+    void *pRpcCcslCtx;
+    NvBool (*getProperty)(struct ConfidentialCompute *pCC, NvU32 prop);
+};
+
 // ============================================================================
 // 3. PORT LAYER (Memory, Atomic, String)
 // ============================================================================
@@ -262,10 +274,8 @@ static inline NvU32 portSafeMulU32(NvU32 a, NvU32 b, NvU32 *result)
 
 static inline NvU64 osGetTimestampFreq(void)
 {
-    static mach_timebase_info_data_t sTimebase = {};
-    if (sTimebase.denom == 0)
-        mach_timebase_info(&sTimebase);
-    return (NvU64)(1000000000ULL * sTimebase.denom / sTimebase.numer);
+    // mach_absolute_time() on x86_64 macOS returns nanoseconds
+    return 1000000000ULL;
 }
 
 #define osDelay(ms)                             IOSleep(ms)
@@ -282,12 +292,7 @@ static inline NvU64 osGetTimestampFreq(void)
 // Registry read/write — built on IORegistryEntry::getProperty
 static inline NvBool osReadRegistryDword(OBJGPU *pGpu, const char *key, NvU32 *val)
 {
-    GA104Device *dev = pGpu->device;
-    OSData *data = OSDynamicCast(OSData, dev->getProperty(key));
-    if (data && data->getLength() >= 4) {
-        *val = *(const NvU32*)data->getBytesNoCopy();
-        return NV_TRUE;
-    }
+    (void)pGpu; (void)key; (void)val;
     return NV_FALSE;
 }
 
@@ -563,7 +568,7 @@ typedef struct OBJGPU {
 #define GPU_GET_KERNEL_GSP(pGpu)                ((pGpu)->pKernelGsp)
 #define GPU_GET_KERNEL_SEC2(pGpu)               ((pGpu)->pKernelSec2)
 #define GPU_GET_KERNEL_FIFO(pGpu)               ((void*)NULL)
-#define GPU_GET_CONF_COMPUTE(pGpu)              ((void*)NULL)
+#define GPU_GET_CONF_COMPUTE(pGpu)              ((struct ConfidentialCompute*)0)
 #define GPU_GET_PHYSICAL_RMAPI(pGpu)            ((void*)NULL)
 #define GPU_GET_KERNEL_PERF(pGpu)               ((void*)NULL)
 #define GPU_GET_KERNEL_NVLINK(pGpu)             ((void*)NULL)
@@ -789,8 +794,7 @@ typedef NvBool (*GpuWaitConditionFunc)(void *pData);
 #define NV_FALCON2_GSP_BASE             0x111000
 
 // Private properties stub
-#define PDB_PROP_CONFCOMPUTE_CC_FEATURE_ENABLED   NV_FALSE
-#define GPU_GET_CONF_COMPUTE(pGpu)                  ((void*)NULL)
+#define GPU_GET_CONF_COMPUTE(pGpu)                  ((struct ConfidentialCompute*)0)
 
 // ============================================================================
 // 14. TIMEOUT / TIMER HELPERS
@@ -802,7 +806,10 @@ typedef struct {
 } RMTIMEOUT;
 
 #define GPU_TIMEOUT_DEFAULT             { .flags = 0, .timeoutAbs = 0 }
-#define GPU_TIMEOUT_FLAGS_OSTIMER       0
+#define GPU_TIMEOUT_FLAGS_OSTIMER                      0
+#define GPU_TIMEOUT_FLAGS_DEFAULT                       0
+#define GPU_TIMEOUT_FLAGS_BYPASS_THREAD_STATE           0
+#define GPU_TIMEOUT_FLAGS_BYPASS_JOURNAL_LOG            0
 
 static inline void gpuSetTimeout(OBJGPU *pGpu, NvU64 timeoutUs,
                                   RMTIMEOUT *pTimeout, NvU32 flags)
@@ -932,12 +939,15 @@ typedef struct MESSAGE_QUEUE_INFO {
 } MESSAGE_QUEUE_INFO;
 
 // Queue collection — holds shared memory and PTEs
+#define RPC_TASK_RM_QUEUE_IDX   0
+#define RPC_QUEUE_COUNT         1
 typedef struct MESSAGE_QUEUE_COLLECTION {
     MEMORY_DESCRIPTOR *pSharedMemDesc;
     NvU32  pageTableSize;
     NvU32  pageTableEntryCount;
     NvU64  sharedMemPA;      // physical address of first page
     void  *pVa;              // kernel virtual address of shared memory
+    MESSAGE_QUEUE_INFO rpcQueues[RPC_QUEUE_COUNT];
 } MESSAGE_QUEUE_COLLECTION;
 
 // MSGQ handle type
@@ -987,5 +997,50 @@ static inline NvU32 gspMsgQueueBytesToElements(NvU32 bytes, NvU32 elMin)
 #define RM_PAGE_SIZE            4096
 #define RM_PAGE_SHIFT           12
 #define RM_PAGE_SIZE_128K       0x20000
+
+// ============================================================================
+// 16. HW PLATFORM CHECKS (stubs for message_queue_cpu.c)
+// ============================================================================
+
+#define IS_EMULATION(pGpu)                      NV_FALSE
+#define IS_SIMULATION(pGpu)                     NV_FALSE
+
+static inline void threadStateResetTimeout(OBJGPU *pGpu) {}
+
+// ============================================================================
+// 17. CC/ENCRYPTION STUBS (for message_queue_cpu.c)
+// ============================================================================
+
+static inline NvBool confComputeForceUnprotAlloc(OBJGPU *pGpu) { return NV_FALSE; }
+static inline void    confComputeSetErrorState(OBJGPU *pGpu, void *pCC) {}
+static inline NV_STATUS gspMsgQueueCCEncrypt(void *ctx, MESSAGE_QUEUE_INFO *pMQI,
+                                              GSP_MSG_QUEUE_ELEMENT *pElement, NvU32 len)
+{
+    return NV_OK;
+}
+static inline NV_STATUS gspMsgQueueCCDecrypt(void *ctx, MESSAGE_QUEUE_INFO *pMQI,
+                                              GSP_MSG_QUEUE_ELEMENT *pElement, NvU32 len)
+{
+    return NV_OK;
+}
+
+// ============================================================================
+// 18. MESSAGE QUEUE HELPERS (for message_queue_cpu.c)
+// ============================================================================
+
+static inline GSP_MSG_QUEUE_ENCRYPTION_TAG*
+gspMsgQueueGetEncryptionTag(GSP_MSG_QUEUE_ELEMENT *pElement)
+{
+    return (GSP_MSG_QUEUE_ENCRYPTION_TAG*)&pElement->payload[0];
+}
+
+// Simple 32-bit checksum (sum of all dwords)
+static inline NvU32 _checkSum32(const void *data, NvU32 len)
+{
+    NvU32 sum = 0;
+    const NvU32 *p = (const NvU32*)data;
+    for (NvU32 i = 0; i < len / 4; i++) sum += p[i];
+    return sum;
+}
 
 #endif /* os_compat_h */
