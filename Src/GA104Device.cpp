@@ -1,5 +1,6 @@
 #include "GA104Device.hpp"
 #include "GA104Regs.h"
+#include "GA104DeviceUtilities.h"
 #include "GA104FBProvider.hpp"
 #include "GA104Framebuffer.hpp"
 #include "GA104UserClient.hpp"
@@ -20,37 +21,6 @@
 #define super IOService
 OSDefineMetaClassAndStructors(GA104Device, IOService);
 
-static uint32_t readPropertyU32(IOService *svc, const char *name)
-{
-    OSData *data = OSDynamicCast(OSData, svc->getProperty(name));
-    if (!data || data->getLength() < 4) return 0;
-    return *reinterpret_cast<const uint32_t*>(data->getBytesNoCopy());
-}
-
-static uint16_t readPropertyU16(IOService *svc, const char *name)
-{
-    OSData *data = OSDynamicCast(OSData, svc->getProperty(name));
-    if (!data || data->getLength() < 2) return 0;
-    return *reinterpret_cast<const uint16_t*>(data->getBytesNoCopy());
-}
-
-static uint8_t readPropertyU8(IOService *svc, const char *name)
-{
-    OSData *data = OSDynamicCast(OSData, svc->getProperty(name));
-    if (!data || data->getLength() < 1) return 0;
-    return *reinterpret_cast<const uint8_t*>(data->getBytesNoCopy());
-}
-
-static IOPCIDevice* findPCIDeviceAncestor(IOService *svc)
-{
-    IOService *current = svc;
-    while (current) {
-        IOPCIDevice *pci = OSDynamicCast(IOPCIDevice, current);
-        if (pci) return pci;
-        current = current->getProvider();
-    }
-    return nullptr;
-}
 
 bool GA104Device::init(OSDictionary *dict)
 {
@@ -109,11 +79,102 @@ bool GA104Device::init(OSDictionary *dict)
     fBooterImemSz = 0; fBooterDmemSz = 0;
     fBooterManifestOff = 0; fBooterEngMask = 0;
     fBooterUcode = 0; fBooterAppVer = 0;
-    memset(&fGOP, 0, sizeof(fGOP));
-    memset(fEDID, 0, sizeof(fEDID));
-    fEDIDSize = 0;
-    fRmRoot = 0; fRmDevice = 0; fRmSubdevice = 0; fRmDisp = 0;
+    return true;
+}
 
+void GA104Device::free()
+{
+    OSSafeReleaseNULL(fGSPFirmware);
+    OSSafeReleaseNULL(fGSPQueue);
+    OSSafeReleaseNULL(fGSPProtocol);
+    OSSafeReleaseNULL(fVBIOSDisplay);
+    if (fBAR0Map) { fBAR0Map->release(); fBAR0Map = nullptr; }
+    if (fBAR1Map) { fBAR1Map->release(); fBAR1Map = nullptr; }
+    if (fBAR2Map) { fBAR2Map->release(); fBAR2Map = nullptr; }
+    if (fFWBuffer) { IOFreeAligned(fFWBuffer, fFWBufferSize); fFWBuffer = nullptr; }
+    if (fBootloaderBuffer) { IOFreeAligned(fBootloaderBuffer, fBootloaderSize); fBootloaderBuffer = nullptr; }
+    cleanupPhase2();
+    fProvider = nullptr;
+    super::free();
+}
+
+bool GA104Device::start(IOService *provider)
+{
+    IOLog("GA104: start() called with provider %s\n",
+          provider ? provider->getName() : "(null)");
+    if (!super::start(provider)) return false;
+    
+    setProperty("GA104Started", true);
+    setProperty("GA104Build", "v72g-lilu");
+
+    fProvider = provider;
+    fProvider->retain();
+    IOLog("GA104: Provider retained, reading PCI identity from IORegistry\n");
+
+    if (identifyDevice() != kIOReturnSuccess) return false;
+    IOLog("GA104: Device identified, enabling PCI resources\n");
+
+    IOPCIDevice *pciDev = findPCIDeviceAncestor(fProvider);
+    if (pciDev) {
+        pciDev->setIOEnable(true);
+        pciDev->setBusMasterEnable(true);
+        IOLog("GA104: PCI bus mastering and IO enabled\n");
+    } else {
+        IOLog("GA104: WARNING - could not find IOPCIDevice ancestor for PCI cfg writes\n");
+    }
+
+    // Mapear BARs (pode falhar em VFIO)
+    // NOTE: Do not access GPU registers here - causes panic in VFIO.
+    // O acesso a registos e feito apenas via UserClient.
+    IOReturn barRet = mapBars();
+    if (barRet == kIOReturnSuccess && fBar0Virt) {
+        IOLog("GA104: BARs mapped OK (stub mode - no register access)\n");
+        fVRAMSize = fBar1Size;
+        setProperty("GA104BAR0Size", (uint64_t)fBAR0Map->getLength(), 64);
+        setProperty("GA104BAR1Size", fBar1Size, 64);
+    } else {
+        IOLog("GA104: BARs not available, running in stub mode\n");
+        fVRAMSize = 0x200000000ULL;
+    }
+    setProperty("VRAM,totalMB", (uint64_t)(fVRAMSize / (1024 * 1024)), 32);
+
+    IOLog("GA104: Device started in stub mode — use UserClient for GPU operations\n");
+
+    // Auto-boot GSP via IOTimerEventSource (delayed to avoid kernel panic)
+    // Fallback: bootGSP() will be called from userspace loader
+
+    // Initialize display engine (bare metal with BAR access)
+    if (fBar0Virt && fBar1Virt) {
+        IOReturn dispRet = setupFramebuffer();
+        if (dispRet == kIOReturnSuccess) {
+            setupDisplayChannels();
+            legacyDisplayInit();
+            IOLog("GA104: Display initialized — FB at 0x%llx\n", fFB.fbAddr);
+        } else {
+            IOLog("GA104: Framebuffer setup failed, skipping display init\n");
+        }
+    } else {
+        IOLog("GA104: BARs not mapped, skipping display init\n");
+    }
+
+    // Create framebuffer provider as a child nub
+    GA104FBProvider *fb = new GA104FBProvider;
+    if (fb && fb->init(this)) {
+        if (fb->start(this)) {
+            fFBProvider = fb;
+            fFBProvider->retain();
+            IOLog("GA104: FBProvider started as child nub\n");
+        } else {
+            IOLog("GA104: FBProvider start failed\n");
+            fb->release();
+        }
+    } else {
+        if (fb) fb->release();
+        IOLog("GA104: FBProvider init failed\n");
+    }
+
+    registerService();
+    IOLog("GA104: Device started (ID: 0x%04x, Rev: 0x%02x)\n", fDeviceID, fRevision);
     return true;
 }
 
@@ -566,7 +627,7 @@ IOReturn GA104Device::sendGspRpcAllocRoot()
     for (uint32_t ri = 0; ri < wPtr; ri++) {
         uint32_t eIdx = ri % GSP_QUEUE_MSG_COUNT;
         uint8_t *mEntry = fMsgqEntryBase + eIdx * GSP_QUEUE_MSG_SIZE;
-        (void)mEntry; //
+        GspMsgQueuePrefix *mPre = (GspMsgQueuePrefix*)mEntry;
         GspRpcMessageHeader *mRpc = (GspRpcMessageHeader*)(mEntry + sizeof(GspMsgQueuePrefix));
         if (mRpc->function == NV_VGPU_MSG_FUNCTION_GSP_RM_ALLOC) {
             IOLog("GA104: ALLOC_ROOT response found in msgq: rpcResult=0x%x\n", mRpc->rpcResult);
@@ -608,77 +669,6 @@ IOReturn GA104Device::sendGspRpcAllocRoot()
 
     IOLog("GA104: ALLOC_ROOT via cmdq failed (0x%x)\n", rpcRet);
     return rpcRet;
-}
-
-IOReturn GA104Device::sendGspRpcAllocDisplayChain()
-{
-    if (!fGSPProtocol) return kIOReturnNotReady;
-    IOLog("GA104: Allocating RM display objects...\n");
-
-    // 1. ALLOC_DEVICE (NV01_DEVICE_0)
-    GspRpcMessageHeader msg, reply;
-    uint32_t replySz = 0;
-    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
-
-    // Use NVKM_RM handles from GSPProtocol.hpp
-    NvHandle hClient = NVKM_RM_DEVICE;   // client = device handle
-    NvHandle hDevice = NVKM_RM_SUBDEVICE; // device handle
-    NvHandle hSubdevice = 0x5D1D0001;    // subdevice handle
-    NvHandle hDisp = NVKM_RM_DISP;       // display handle
-
-    fGSPProtocol->buildAllocDevice(&msg, hClient, hDevice, 0);
-    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
-    IOReturn ret = sendGspRpc(&msg,
-        (uint8_t*)&msg + sizeof(GspRpcMessageHeader), payloadSz,
-        &reply, sizeof(reply), &replySz, 10000);
-    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
-        GspRmAllocParams *out = (GspRmAllocParams*)((uint8_t*)&reply + sizeof(GspRpcMessageHeader));
-        fRmRoot = 0;
-        fRmDevice = out->hObject;
-        setProperty("GA104RM_Device", (uint64_t)fRmDevice, 32);
-        IOLog("GA104: ALLOC_DEVICE -> handle 0x%x\n", fRmDevice);
-    } else {
-        IOLog("GA104: ALLOC_DEVICE failed (rpc=0x%x, ret=0x%x)\n", reply.rpcResult, ret);
-        return ret;
-    }
-
-    // 2. ALLOC_SUBDEVICE
-    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
-    fGSPProtocol->buildAllocSubdevice(&msg, hClient, fRmDevice, hSubdevice);
-    payloadSz = msg.length - sizeof(GspRpcMessageHeader);
-    ret = sendGspRpc(&msg,
-        (uint8_t*)&msg + sizeof(GspRpcMessageHeader), payloadSz,
-        &reply, sizeof(reply), &replySz, 10000);
-    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
-        GspRmAllocParams *out = (GspRmAllocParams*)((uint8_t*)&reply + sizeof(GspRpcMessageHeader));
-        fRmSubdevice = out->hObject;
-        setProperty("GA104RM_Subdevice", (uint64_t)fRmSubdevice, 32);
-        IOLog("GA104: ALLOC_SUBDEVICE -> handle 0x%x\n", fRmSubdevice);
-    } else {
-        IOLog("GA104: ALLOC_SUBDEVICE failed (rpc=0x%x, ret=0x%x)\n", reply.rpcResult, ret);
-        return ret;
-    }
-
-    // 3. ALLOC_DISP (NV0073)
-    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
-    fGSPProtocol->buildAllocDisp(&msg, hClient, fRmSubdevice, hDisp, 0x0F, 0x0F);
-    payloadSz = msg.length - sizeof(GspRpcMessageHeader);
-    ret = sendGspRpc(&msg,
-        (uint8_t*)&msg + sizeof(GspRpcMessageHeader), payloadSz,
-        &reply, sizeof(reply), &replySz, 10000);
-    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
-        GspRmAllocParams *out = (GspRmAllocParams*)((uint8_t*)&reply + sizeof(GspRpcMessageHeader));
-        fRmDisp = out->hObject;
-        setProperty("GA104RM_Disp", (uint64_t)fRmDisp, 32);
-        IOLog("GA104: ALLOC_DISP -> handle 0x%x\n", fRmDisp);
-    } else {
-        IOLog("GA104: ALLOC_DISP failed (rpc=0x%x, ret=0x%x)\n", reply.rpcResult, ret);
-        return ret;
-    }
-
-    setProperty("GA104_RM_ChainDone", true);
-    IOLog("GA104: RM display chain allocated successfully\n");
-    return kIOReturnSuccess;
 }
 
 // --- Fill framebuffer with solid color (red = 0x000000FF BGRA) ---
@@ -773,9 +763,9 @@ IOReturn GA104Device::flipToTriangle()
 
     // Rasterizar triângulo com gradiente RGB barycentric
     // Vértices: A(960,100) vermelho, B(100,900) verde, C(1820,900) azul
-    float ax = 960, ay = 100; /* cr unused */
-    float bx = 100, by = 900; /* cg unused */
-    float cx = 1820, cy = 900; /* cb unused */
+    float ax = 960, ay = 100; uint32_t cr = 0xFF0000FF; // ABGR: R=255
+    float bx = 100, by = 900; uint32_t cg = 0xFF00FF00; // G=255
+    float cx = 1820, cy = 900; uint32_t cb = 0xFFFF0000; // B=255
 
     float denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
 
@@ -899,11 +889,11 @@ IOReturn GA104Device::bootGSP()
     setProperty("GA104GSP_Step0_Base", true);
 
     // Read Falcon state via FALCON_CPUCTL (BAR0+0x110100)
-    uint32_t gspCpuctl1 = readReg32(FALCON_CPUCTL);
+    uint32_t cpuctl = readReg32(FALCON_CPUCTL);
     uint32_t mailbox0 = readReg32(FALCON_MAILBOX0);
-    setProperty("GA104GSP_Step1_CPUCTL", gspCpuctl1, 32);
+    setProperty("GA104GSP_Step1_CPUCTL", cpuctl, 32);
     setProperty("GA104GSP_Step1_Mailbox0", mailbox0, 32);
-    IOLog("GA104: GSP CPUCTL=0x%08x mb0=0x%x\n", gspCpuctl1, mailbox0);
+    IOLog("GA104: GSP CPUCTL=0x%08x mb0=0x%x\n", cpuctl, mailbox0);
     IOReturn ret;
 
     // === Prepare GSP environment (used by both SEC2 and direct boot) ===
@@ -1102,11 +1092,12 @@ IOReturn GA104Device::bootGSP()
         }
         // Read MAILBOX0 for firmware status
         uint32_t mb0_val = readReg32(FALCON_MAILBOX0);  
-        uint32_t gspCpuctlAfter = readReg32(FALCON_CPUCTL);   
-        uint32_t bcr            = readReg32(FALCON_BCR_CTRL);   
+        uint32_t cpuctl = readReg32(FALCON_CPUCTL);   
+        uint32_t bcr    = readReg32(FALCON_BCR_CTRL);   
         IOLog("GA104: GSP mailbox0=0x%08x cpuctl=0x%08x bcr=0x%08x\n",
-              mb0_val, gspCpuctlAfter, bcr);
-        setProperty("GA104_CPUCTL", gspCpuctlAfter, 32);
+              mb0_val, cpuctl, bcr);
+        setProperty("GA104_MB0", mb0_val, 32);
+        setProperty("GA104_CPUCTL", cpuctl, 32);
         setProperty("GA104_BCR", bcr, 32);
         
         // If MB0 looks like an address, try reading from it via VRAM
@@ -1173,12 +1164,7 @@ IOReturn GA104Device::bootGSP()
         setProperty("GA104_FinalrPtr", finalRp, 32);
 
         IOLog("GA104: DEBUG calling sendGspRpcAllocRoot()\n");
-        IOReturn rootRet = sendGspRpcAllocRoot();
-        if (rootRet == kIOReturnSuccess) {
-            IOLog("GA104: ALLOC_ROOT OK, allocating display chain...\n");
-            sendGspRpcAllocDisplayChain();
-        }
-        return rootRet;
+        return sendGspRpcAllocRoot();
     }
 
     // SEC2 failed — try GSP Falcon booter (if bootloader available)
@@ -1280,12 +1266,7 @@ IOReturn GA104Device::bootGSP()
         IOLog("GA104: Final cmdq wPtr=%u rPtr=%u\n", fwp, frp);
         setProperty("GA104_FinalwPtr", fwp, 32);
         setProperty("GA104_FinalrPtr", frp, 32);
-        IOReturn rootRet2 = sendGspRpcAllocRoot();
-        if (rootRet2 == kIOReturnSuccess) {
-            IOLog("GA104: ALLOC_ROOT OK (2), allocating display chain...\n");
-            sendGspRpcAllocDisplayChain();
-        }
-        return rootRet2;
+        return sendGspRpcAllocRoot();
     }
 
     return kIOReturnTimeout;
@@ -1329,7 +1310,7 @@ IOReturn GA104Device::calculateVramLayout()
     uint64_t wpr2Size = (frtsAddr + frtsSize) - heapAddr;
 
     // Non-WPR heap (1MB below WPR2, only if space permits)
-    /* nwprHeapSize unused */ uint64_t nwprHeapSize_dummy = 0;
+    uint64_t nwprHeapSize = 0;
 
     // If VRAM is very small, pack things tightly
     if (heapAddr < 0x100000) {
@@ -1953,7 +1934,7 @@ IOReturn GA104Device::sendGspRpc(GspRpcMessageHeader *msg, void *payload,
     __sync_synchronize();
 
     // Doorbell: usar aliased offset (não writeAbsReg32 — fora do BAR0!)
-    /* wpDoor unused */
+    uint32_t wpDoor = fCmdqTx ? fCmdqTx->writePtr : 0;
     writeReg32(GSP_DOORBELL_REL, 0);  // aliased 0x0C00 -> QUEUE_HEAD(0)
     __sync_synchronize();
     setProperty("GA104_DoorbellMailbox", (uint32_t)fCmdqTx->writePtr, 32);
@@ -1969,7 +1950,6 @@ IOReturn GA104Device::sendGspRpc(GspRpcMessageHeader *msg, void *payload,
             uint32_t eIdx = rp % GSP_QUEUE_MSG_COUNT;
             uint8_t *mEntry = fMsgqEntryBase + eIdx * GSP_QUEUE_MSG_SIZE;
             GspMsgQueuePrefix *mPre = (GspMsgQueuePrefix*)mEntry;
-            (void)mPre; // quiet unused warning
             GspRpcMessageHeader *mRpc = (GspRpcMessageHeader*)(mEntry + sizeof(GspMsgQueuePrefix));
 
             if (mPre->seqNum == targetSeq && mRpc->function == targetFunc) {
@@ -2501,9 +2481,9 @@ IOReturn GA104Device::programHeadForMode(uint32_t head, uint32_t width, uint32_t
 
     // Timings for 1920x1080@60Hz (CVT-RB standard)
     uint32_t hVisible = width, vVisible = height;
-    uint32_t hTotal = 2200, /* hSyncStart=2008 */ hSyncEnd = 2052;
+    uint32_t hTotal = 2200, hSyncStart = 2008, hSyncEnd = 2052;
     uint32_t hBlankStart = hVisible, hBlankEnd = hTotal;
-    uint32_t vTotal = 1125, /* vSyncStart=1084 */ vSyncEnd = 1088;
+    uint32_t vTotal = 1125, vSyncStart = 1084, vSyncEnd = 1088;
     uint32_t vBlankStart = vVisible, vBlankEnd = vTotal;
     uint32_t pixelClockKHz = 148500; // 148.5 MHz
 
@@ -2563,74 +2543,6 @@ IOReturn GA104Device::programHeadForMode(uint32_t head, uint32_t width, uint32_t
     setProperty("GA104VLine", vline, 32);
 
     return kIOReturnSuccess;
-}
-
-IOReturn GA104Device::readEDID(uint8_t *edid, uint32_t maxSize)
-{
-    if (!fBar0Virt || !edid || maxSize < 128) return kIOReturnBadArgument;
-    IOLog("GA104: readEDID starting\n");
-
-    // AUX channel for SOR 0
-    uint32_t sor = 0;
-
-    // EDID DDC address: 0xA0 (write), 0xA1 (read)
-    // Step 1: Write offset 0x00 to DDC address 0x50 via AUX
-    uint32_t ddcAddr = 0x50;
-
-    // Set AUX address to DDC segment index (I2C address 0x50, offset 0x00)
-    writeReg32(NV_PSOR_AUX_ADDR(sor), (ddcAddr << 1) | 0);  // 0xA0 = write
-    writeReg32(NV_PSOR_AUX_DATA(sor), 0x00);  // EDID offset 0
-    __sync_synchronize();
-
-    // Start AUX transaction: mot=0, len=1, address only
-    uint32_t ctl = 0;
-    ctl |= (1 << 4);      // send address + data
-    ctl |= (1 << 0);      // start transaction
-    ctl |= (1 << 26);     // AUX request: write
-    ctl |= (1 << 8);      // length = 1 byte
-    writeReg32(NV_PSOR_AUX_CTL(sor), ctl);
-    __sync_synchronize();
-
-    // Wait for transaction to complete
-    for (int i = 0; i < 1000; i++) {
-        uint32_t stat = readReg32(NV_PSOR_AUX_STAT(sor));
-        if (!(stat & 0x01)) break;  // busy bit cleared
-        IODelay(1);
-    }
-    IODelay(500);  // Wait for DDC settle
-
-    // Step 2: Read 128 bytes from DDC address 0x50
-    writeReg32(NV_PSOR_AUX_ADDR(sor), (ddcAddr << 1) | 1);  // 0xA1 = read
-    __sync_synchronize();
-
-    // Start AUX read transaction: mot=0, len=128
-    ctl = 0;
-    ctl |= (1 << 4);      // send address
-    ctl |= (1 << 0);      // start
-    ctl |= (0 << 26);     // AUX request: read
-    ctl |= (128 << 8);    // read 128 bytes
-    writeReg32(NV_PSOR_AUX_CTL(sor), ctl);
-    __sync_synchronize();
-
-    // Poll for completion
-    for (int i = 0; i < 2000; i++) {
-        uint32_t stat = readReg32(NV_PSOR_AUX_STAT(sor));
-        if (!(stat & 0x01)) {
-            // Read data
-            for (int j = 0; j < 128 && j < maxSize; j++) {
-                uint32_t dw = readReg32(NV_PSOR_AUX_DATA(sor));
-                edid[j] = (dw >> ((j % 4) * 8)) & 0xFF;
-            }
-            IOLog("GA104: EDID read complete (%d bytes)\n", 128);
-            setProperty("GA104_EDID_Found", true, 8);
-            return kIOReturnSuccess;
-        }
-        IODelay(1);
-    }
-
-    IOLog("GA104: EDID read timeout\n");
-    setProperty("GA104_EDID_Timeout", true, 8);
-    return kIOReturnTimeout;
 }
 
 IOReturn GA104Device::createFWBuffer(uint32_t size)
@@ -3117,23 +3029,23 @@ IOReturn GA104Device::gspStartBooter(void)
     __sync_synchronize();
 
     // === Step 7: Poll for Booter completion ===
-    readReg32(FALCON_BCR_CTRL); /* bcrStart discarded */
+    uint32_t bcrStart = readReg32(FALCON_BCR_CTRL);
     bool booterDone = false;
     for (int i = 0; i < 5000; i++) {
         IOSleep(2);
         uint32_t bcr = readReg32(FALCON_BCR_CTRL);
-        uint32_t booterCpuctl = readReg32(FALCON_CPUCTL);
+        uint32_t cpuctl = readReg32(FALCON_CPUCTL);
         // Booter sets BCR_CTRL = CORE_SELECT_RISCV when switching to RISC-V
         // On GA104, VALID bit (0x1) may not be set by the Booter
         if ((bcr & 0x10) == 0x10) {
             IOLog("GA104: Booter done after %dms (BCR=0x%08x CPUCTL=0x%08x)\n",
-                  i * 2, bcr, booterCpuctl);
+                  i * 2, bcr, cpuctl);
             booterDone = true;
             break;
         }
         if ((i % 1000) == 999) {
             IOLog("GA104:   still waiting... BCR=0x%08x CPUCTL=0x%08x\n",
-                  bcr, booterCpuctl);
+                  bcr, cpuctl);
         }
     }
 
