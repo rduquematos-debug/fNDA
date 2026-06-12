@@ -18,10 +18,10 @@ to the macOS IOKit framework.
 
 ---
 
-## Progresso do Port
+## Port Progress
 
-| Área | % | Barra |
-|------|---|-------|
+| Area | % | Bar |
+|------|---|-----|
 | Core Driver (GSP-RM, PCI, BARs) | 83% | `████████░░` |
 | GSP Boot (SEC2 + Falcon) | 85% | `████████░░` |
 | GSP RPC (message queues, alloc/control) | 85% | `████████░░` |
@@ -33,9 +33,9 @@ to the macOS IOKit framework.
 | VBIOS Parsing (DCB/CONN) | 75% | `███████░░░` |
 | NVIDIA Ported Code (byte-for-byte) | 80% | `████████░░` |
 | os_compat.h (Linux→macOS compat layer) | 85% | `████████░░` |
-| **Geral** | **78%** | **`████████░░`** |
+| **Overall** | **78%** | **`████████░░`** |
 
-~18.100 linhas de código kext + ~3.800 linhas NVIDIA portadas byte-for-byte + 991 linhas de compat layer.
+~18,100 lines of kext code + ~3,800 lines of byte-for-byte NVIDIA ported code + 991 lines of compat layer.
 
 ---
 

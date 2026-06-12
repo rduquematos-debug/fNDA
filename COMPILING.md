@@ -42,13 +42,11 @@ sudo cp -r GA104Driver.kext /mnt/EFI/OC/Kexts/
 # (Or use the included config.plist as base)
 ```
 
-## Deploy to VM (Quickemu)
+## Load on Bare Metal
 
 ```bash
-cd ../tools
-./vm-kill.sh
-./vm-deploy-kext.sh
-./vm-boot.sh
+sudo cp -r GA104Driver.kext /tmp/
+sudo kmutil load -v --bundle-path /tmp/GA104Driver.kext
 ```
 
 ## Test
