@@ -10,14 +10,6 @@ to the macOS IOKit framework.
 
 ---
 
-<p align="center">
-  <a href="https://buymeacoffee.com/rafadebugs">
-    <img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy me a coffee"/>
-  </a>
-</p>
-
----
-
 ## Port Progress
 
 | Area | % | Bar |
