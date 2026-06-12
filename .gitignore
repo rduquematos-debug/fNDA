@@ -21,6 +21,8 @@ tools/vm-config.local.sh
 # VM scripts (local infrastructure, not project code)
 tools/deploy.sh
 tools/vm-*.sh
+# Exception for the curated VFIO test script
+!tools/gsp-test-vfio.sh
 
 # IDE / OS files
 .DS_Store

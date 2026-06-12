@@ -291,6 +291,7 @@ IOReturn GA104Device::bootSEC2()
             setProperty("GA104SEC2_Mb0Changed", mb0, 32);
         }
         if (cpuctl & 0x10) { // HALTED
+            mb0_final = mb0;
             IOLog("GA104: SEC2: HALTED after %dms! CPUCTL=0x%08x MB0=0x%08x\n",
                   i * 10, cpuctl, mb0);
             setProperty("GA104SEC2_HaltedMs", (uint64_t)(i * 10), 64);
@@ -487,12 +488,16 @@ IOReturn GA104Device::bootGSP()
         IOLog("GA104: GSP after SEC2: CPUCTL=0x%08x BOOTVEC=0x%08x MB0=0x%08x MB1=0x%08x\n",
               gspCpuctl, gspBootvec, gspMb0, gspMb1);
         uint32_t riscvCpuctl = readAbsReg32(0x00111388);
-        IOLog("GA104: SEC2_DONE — GSP RISC-V BCR=0x%08x IRQSTAT=0x%08x RISCV_CPUCTL=0x%08x\n",
-              readReg32(FALCON_BCR_CTRL),
-              readReg32(FALCON_IRQSTAT),
-              riscvCpuctl);
+        uint32_t riscvBcr = readReg32(FALCON_BCR_CTRL);
+        uint32_t riscvIrq = readReg32(FALCON_IRQSTAT);
+        IOLog("GA104: SEC2_DONE - GSP RISC-V BCR=0x%08x IRQSTAT=0x%08x RISCV_CPUCTL=0x%08x\n",
+              riscvBcr, riscvIrq, riscvCpuctl);
+        IOLog("GA104: RISCV_CPUCTL decode: started=%d halted=%d active=%d\n",
+              riscvCpuctl & 1, (riscvCpuctl >> 4) & 1, (riscvCpuctl >> 7) & 1);
+        IOLog("GA104: SEC2 phys: WPR=0x%llx LibOS=0x%llx SHM=0x%llx FW=0x%llx\n",
+              fWprMetaPhys, fLibosPhys, fShmPhys, fFWBufferPhys);
         bool riscvActive = (riscvCpuctl & 0x80) != 0;
-        IOLog("GA104: RISC-V %s\n", riscvActive ? "ACTIVE ✅" : "NOT ACTIVE ❌");
+        IOLog("GA104: RISC-V %s\n", riscvActive ? "ACTIVE OK" : "NOT ACTIVE");
         setProperty("GA104_RISCV_ACTIVE", riscvActive);
 
         if (fVramCmdqEntryBase) {
@@ -670,8 +675,23 @@ IOReturn GA104Device::bootGSP()
             // Poll MSGQ writePtr — firmware writes events here after processing
             uint32_t msgqWp = *(volatile uint32_t*)((uint8_t*)fShmBuf + fMsgqOff + 0x10);
 
-            if ((waitMs % 5000) == 0)
-                IOLog("GA104: poll %dms: cmdq rPtr=%u msgq wPtr=%u\n", waitMs, cmdqRp, msgqWp);
+            if ((waitMs % 5000) == 0) {
+                uint32_t mb0 = readReg32(FALCON_MAILBOX0);
+                uint32_t irq = readReg32(FALCON_IRQSTAT);
+                uint32_t bcr = readReg32(FALCON_BCR_CTRL);
+                IOLog("GA104: poll %dms: cmdq rPtr=%u msgq wPtr=%u mb0=0x%08x irq=0x%08x bcr=0x%08x\n",
+                      waitMs, cmdqRp, msgqWp, mb0, irq, bcr);
+                // Check if firmware wrote anything to VRAM via WPR address
+                if (fWprAddr && fBar1Virt) {
+                    volatile uint32_t *fw_mem = (volatile uint32_t*)(fBar1Virt + fWprAddr);
+                    uint32_t fw0 = fw_mem[0];
+                    if (fw0 != fLastFwVal) {
+                        IOLog("GA104: FW mem @0x%x changed: 0x%08x -> 0x%08x\n",
+                              fWprAddr, fLastFwVal, fw0);
+                        fLastFwVal = fw0;
+                    }
+                }
+            }
 
             if (msgqWp > fLastMsgqRp) {
                 for (uint32_t ei = fLastMsgqRp; ei < msgqWp; ei++) {
