@@ -18,6 +18,10 @@ serial.log
 tools/vm-config.local.sh
 *.local
 
+# VM scripts (local infrastructure, not project code)
+tools/deploy.sh
+tools/vm-*.sh
+
 # IDE / OS files
 .DS_Store
 .vscode/
