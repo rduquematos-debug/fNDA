@@ -109,102 +109,10 @@ bool GA104Device::init(OSDictionary *dict)
     fBooterImemSz = 0; fBooterDmemSz = 0;
     fBooterManifestOff = 0; fBooterEngMask = 0;
     fBooterUcode = 0; fBooterAppVer = 0;
-    return true;
-}
+    memset(&fGOP, 0, sizeof(fGOP));
+    memset(fEDID, 0, sizeof(fEDID));
+    fEDIDSize = 0;
 
-void GA104Device::free()
-{
-    OSSafeReleaseNULL(fGSPFirmware);
-    OSSafeReleaseNULL(fGSPQueue);
-    OSSafeReleaseNULL(fGSPProtocol);
-    OSSafeReleaseNULL(fVBIOSDisplay);
-    if (fBAR0Map) { fBAR0Map->release(); fBAR0Map = nullptr; }
-    if (fBAR1Map) { fBAR1Map->release(); fBAR1Map = nullptr; }
-    if (fBAR2Map) { fBAR2Map->release(); fBAR2Map = nullptr; }
-    if (fFWBuffer) { IOFreeAligned(fFWBuffer, fFWBufferSize); fFWBuffer = nullptr; }
-    if (fBootloaderBuffer) { IOFreeAligned(fBootloaderBuffer, fBootloaderSize); fBootloaderBuffer = nullptr; }
-    cleanupPhase2();
-    fProvider = nullptr;
-    super::free();
-}
-
-bool GA104Device::start(IOService *provider)
-{
-    IOLog("GA104: start() called with provider %s\n",
-          provider ? provider->getName() : "(null)");
-    if (!super::start(provider)) return false;
-    
-    setProperty("GA104Started", true);
-    setProperty("GA104Build", "v72g-lilu");
-
-    fProvider = provider;
-    fProvider->retain();
-    IOLog("GA104: Provider retained, reading PCI identity from IORegistry\n");
-
-    if (identifyDevice() != kIOReturnSuccess) return false;
-    IOLog("GA104: Device identified, enabling PCI resources\n");
-
-    IOPCIDevice *pciDev = findPCIDeviceAncestor(fProvider);
-    if (pciDev) {
-        pciDev->setIOEnable(true);
-        pciDev->setBusMasterEnable(true);
-        IOLog("GA104: PCI bus mastering and IO enabled\n");
-    } else {
-        IOLog("GA104: WARNING - could not find IOPCIDevice ancestor for PCI cfg writes\n");
-    }
-
-    // Mapear BARs (pode falhar em VFIO)
-    // NOTE: Do not access GPU registers here - causes panic in VFIO.
-    // O acesso a registos e feito apenas via UserClient.
-    IOReturn barRet = mapBars();
-    if (barRet == kIOReturnSuccess && fBar0Virt) {
-        IOLog("GA104: BARs mapped OK (stub mode - no register access)\n");
-        fVRAMSize = fBar1Size;
-        setProperty("GA104BAR0Size", (uint64_t)fBAR0Map->getLength(), 64);
-        setProperty("GA104BAR1Size", fBar1Size, 64);
-    } else {
-        IOLog("GA104: BARs not available, running in stub mode\n");
-        fVRAMSize = 0x200000000ULL;
-    }
-    setProperty("VRAM,totalMB", (uint64_t)(fVRAMSize / (1024 * 1024)), 32);
-
-    IOLog("GA104: Device started in stub mode — use UserClient for GPU operations\n");
-
-    // Auto-boot GSP via IOTimerEventSource (delayed to avoid kernel panic)
-    // Fallback: bootGSP() will be called from userspace loader
-
-    // Initialize display engine (bare metal with BAR access)
-    if (fBar0Virt && fBar1Virt) {
-        IOReturn dispRet = setupFramebuffer();
-        if (dispRet == kIOReturnSuccess) {
-            setupDisplayChannels();
-            legacyDisplayInit();
-            IOLog("GA104: Display initialized — FB at 0x%llx\n", fFB.fbAddr);
-        } else {
-            IOLog("GA104: Framebuffer setup failed, skipping display init\n");
-        }
-    } else {
-        IOLog("GA104: BARs not mapped, skipping display init\n");
-    }
-
-    // Create framebuffer provider as a child nub
-    GA104FBProvider *fb = new GA104FBProvider;
-    if (fb && fb->init(this)) {
-        if (fb->start(this)) {
-            fFBProvider = fb;
-            fFBProvider->retain();
-            IOLog("GA104: FBProvider started as child nub\n");
-        } else {
-            IOLog("GA104: FBProvider start failed\n");
-            fb->release();
-        }
-    } else {
-        if (fb) fb->release();
-        IOLog("GA104: FBProvider init failed\n");
-    }
-
-    registerService();
-    IOLog("GA104: Device started (ID: 0x%04x, Rev: 0x%02x)\n", fDeviceID, fRevision);
     return true;
 }
 
@@ -2573,6 +2481,74 @@ IOReturn GA104Device::programHeadForMode(uint32_t head, uint32_t width, uint32_t
     setProperty("GA104VLine", vline, 32);
 
     return kIOReturnSuccess;
+}
+
+IOReturn GA104Device::readEDID(uint8_t *edid, uint32_t maxSize)
+{
+    if (!fBar0Virt || !edid || maxSize < 128) return kIOReturnBadArgument;
+    IOLog("GA104: readEDID starting\n");
+
+    // AUX channel for SOR 0
+    uint32_t sor = 0;
+
+    // EDID DDC address: 0xA0 (write), 0xA1 (read)
+    // Step 1: Write offset 0x00 to DDC address 0x50 via AUX
+    uint32_t ddcAddr = 0x50;
+
+    // Set AUX address to DDC segment index (I2C address 0x50, offset 0x00)
+    writeReg32(NV_PSOR_AUX_ADDR(sor), (ddcAddr << 1) | 0);  // 0xA0 = write
+    writeReg32(NV_PSOR_AUX_DATA(sor), 0x00);  // EDID offset 0
+    __sync_synchronize();
+
+    // Start AUX transaction: mot=0, len=1, address only
+    uint32_t ctl = 0;
+    ctl |= (1 << 4);      // send address + data
+    ctl |= (1 << 0);      // start transaction
+    ctl |= (1 << 26);     // AUX request: write
+    ctl |= (1 << 8);      // length = 1 byte
+    writeReg32(NV_PSOR_AUX_CTL(sor), ctl);
+    __sync_synchronize();
+
+    // Wait for transaction to complete
+    for (int i = 0; i < 1000; i++) {
+        uint32_t stat = readReg32(NV_PSOR_AUX_STAT(sor));
+        if (!(stat & 0x01)) break;  // busy bit cleared
+        IODelay(1);
+    }
+    IODelay(500);  // Wait for DDC settle
+
+    // Step 2: Read 128 bytes from DDC address 0x50
+    writeReg32(NV_PSOR_AUX_ADDR(sor), (ddcAddr << 1) | 1);  // 0xA1 = read
+    __sync_synchronize();
+
+    // Start AUX read transaction: mot=0, len=128
+    ctl = 0;
+    ctl |= (1 << 4);      // send address
+    ctl |= (1 << 0);      // start
+    ctl |= (0 << 26);     // AUX request: read
+    ctl |= (128 << 8);    // read 128 bytes
+    writeReg32(NV_PSOR_AUX_CTL(sor), ctl);
+    __sync_synchronize();
+
+    // Poll for completion
+    for (int i = 0; i < 2000; i++) {
+        uint32_t stat = readReg32(NV_PSOR_AUX_STAT(sor));
+        if (!(stat & 0x01)) {
+            // Read data
+            for (int j = 0; j < 128 && j < maxSize; j++) {
+                uint32_t dw = readReg32(NV_PSOR_AUX_DATA(sor));
+                edid[j] = (dw >> ((j % 4) * 8)) & 0xFF;
+            }
+            IOLog("GA104: EDID read complete (%d bytes)\n", 128);
+            setProperty("GA104_EDID_Found", true, 8);
+            return kIOReturnSuccess;
+        }
+        IODelay(1);
+    }
+
+    IOLog("GA104: EDID read timeout\n");
+    setProperty("GA104_EDID_Timeout", true, 8);
+    return kIOReturnTimeout;
 }
 
 IOReturn GA104Device::createFWBuffer(uint32_t size)

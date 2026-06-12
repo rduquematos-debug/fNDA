@@ -189,6 +189,17 @@ private:
     uint8_t         *fFwImageData;     // saved fwImg pointer for post-boot VRAM re-copy
     uint32_t         fFwImageSize;
 
+    // GOP preserved state
+    struct {
+        uint32_t headBase;
+        uint32_t timing;
+        uint32_t pixelClock;
+    } fGOP;
+
+    // EDID buffer
+    uint8_t          fEDID[256];
+    uint32_t         fEDIDSize;
+
     IOReturn mapBars(void);
     IOReturn identifyDevice(void);
     IOReturn calculateVramLayout(void);
@@ -202,8 +213,11 @@ private:
     IOReturn legacyDisplayInit(void);
     IOReturn setupFramebuffer(void);
     IOReturn setupDisplayChannels(void);
-    IOReturn programHeadForMode(uint32_t head, uint32_t width, uint32_t height, uint32_t refreshHz);
 public:
+    IOReturn programHeadForMode(uint32_t head, uint32_t width, uint32_t height, uint32_t refreshHz);
+    IOReturn readEDID(uint8_t *edid, uint32_t maxSize);
+    uint8_t *getEDID() { return fEDID; }
+    uint32_t getEDIDSize() const { return fEDIDSize; }
     uint64_t getFramebufferAddr() const { return fFB.fbAddr; }
     uint64_t getFramebufferSize() const { return fFB.fbSize; }
     void     *getFramebufferPtr() const { return fFB.vramPtr; }

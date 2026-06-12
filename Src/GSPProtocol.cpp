@@ -218,7 +218,7 @@ IOReturn GSPProtocol::buildDpAuxRead(GspRpcMessageHeader *msg,
                                       uint32_t subdev, uint32_t displayId,
                                       uint32_t addr, uint32_t size)
 {
-    uint32_t params[] = {
+    uint32_t params[] =     {
         subdev, displayId,
         0,       // bAddrOnly = 0
         0x09,    // cmd = DPCD READ
@@ -227,5 +227,40 @@ IOReturn GSPProtocol::buildDpAuxRead(GspRpcMessageHeader *msg,
     };
     return buildRmControl(msg, 0, subdev,
                           NV0073_CTRL_CMD_DP_AUXCH_CTRL,
+                          sizeof(params), params);
+}
+
+IOReturn GSPProtocol::buildDfpGetAttachedIds(GspRpcMessageHeader *msg,
+                                              uint32_t subdev)
+{
+    // NV0073_CTRL_CMD_DFP_GET_ATTACHED_IDS
+    // Params: subdevice, flags
+    // Returns: bitmask of attached display IDs
+    uint32_t params[] = { subdev, 0 };
+    return buildRmControl(msg, 0, subdev,
+                          NV0073_CTRL_CMD_DFP_GET_ATTACHED_IDS,
+                          sizeof(params), params);
+}
+
+IOReturn GSPProtocol::buildDfpGetInfo(GspRpcMessageHeader *msg,
+                                       uint32_t subdev, uint32_t displayId)
+{
+    // NV0073_CTRL_CMD_DFP_GET_INFO
+    // Params: subdevice, displayId, flags
+    // Returns: connector type, pad info, SOR capabilities
+    uint32_t params[] = { subdev, displayId, 0 };
+    return buildRmControl(msg, 0, subdev,
+                          NV0073_CTRL_CMD_DFP_GET_INFO,
+                          sizeof(params), params);
+}
+
+IOReturn GSPProtocol::buildOrAssign(GspRpcMessageHeader *msg,
+                                     uint32_t subdev, uint32_t displayId,
+                                     uint32_t sorExcludeMask, uint32_t protocol)
+{
+    // NV0073_CTRL_CMD_DFP_ASSIGN_SOR
+    uint32_t params[] = { subdev, displayId, sorExcludeMask, protocol, 0, 0 };
+    return buildRmControl(msg, 0, subdev,
+                          NV0073_CTRL_CMD_DFP_ASSIGN_SOR,
                           sizeof(params), params);
 }

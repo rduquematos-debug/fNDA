@@ -129,7 +129,7 @@ IOReturn GA104Framebuffer::setDisplayMode(IODisplayModeID displayMode, IOIndex d
     IOLog("GA104FB: setDisplayMode mode=0x%x depth=%lu\n", (unsigned int)displayMode, (unsigned long)depth);
 
     if (fDevice) {
-        uint32_t w = fWidth, h = fHeight;
+        uint32_t w = fWidth, h = fHeight, refresh = 60;
         // Decode width/height from mode ID (format: 0x8000WWWWxxxxHHHH)
         if (displayMode & 0x80000000) {
             w = (displayMode >> 16) & 0x7FFF;
@@ -137,7 +137,26 @@ IOReturn GA104Framebuffer::setDisplayMode(IODisplayModeID displayMode, IOIndex d
         }
         if (w == 0 || h == 0) { w = fWidth; h = fHeight; }
 
-        IOReturn ret = fDevice->programHeadForMode(0, w, h, 60);
+        // Try to extract refresh rate from EDID (if available)
+        uint8_t *edid = fDevice->getEDID();
+        if (edid && edid[0] == 0x00 && fDevice->getEDIDSize() >= 128) {
+            // EDID detailed timing descriptors at offsets 0x36, 0x48, 0x5A, 0x6C
+            for (int dtd = 0x36; dtd < 0x7E; dtd += 18) {
+                uint16_t h_active = edid[dtd] | (edid[dtd+1] << 8);
+                uint16_t v_active = edid[dtd+5] | (edid[dtd+6] << 8);
+                if (h_active == w && v_active == h) {
+                    uint16_t v_total = (edid[dtd+9] & 0x0F) | (edid[dtd+9+1] << 4);
+                    if (v_total > 0) {
+                        uint32_t pixel_clock_x10k = edid[dtd+0] | (edid[dtd+1] << 8);
+                        refresh = (pixel_clock_x10k * 10000 + v_total * h_active / 2) / (v_total * h_active);
+                        if (refresh < 50) refresh = 60;
+                    }
+                    break;
+                }
+            }
+        }
+
+        IOReturn ret = fDevice->programHeadForMode(0, w, h, refresh);
         if (ret != kIOReturnSuccess) {
             IOLog("GA104FB: programHeadForMode failed: 0x%x\n", ret);
             return ret;

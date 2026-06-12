@@ -82,6 +82,8 @@ public:
     IOReturn buildDisplayGetNumHeads(GspRpcMessageHeader *msg, uint32_t subdev);
     IOReturn buildDisplayGetSupported(GspRpcMessageHeader *msg, uint32_t subdev);
     IOReturn buildOrGetInfo(GspRpcMessageHeader *msg, uint32_t subdev, uint32_t displayId);
+    IOReturn buildOrAssign(GspRpcMessageHeader *msg, uint32_t subdev, uint32_t displayId,
+                           uint32_t sorExcludeMask, uint32_t protocol);
     IOReturn buildDpAuxRead(GspRpcMessageHeader *msg, uint32_t subdev,
                             uint32_t displayId, uint32_t addr, uint32_t size);
     IOReturn buildDpLinkTrain(GspRpcMessageHeader *msg, uint32_t subdev,
@@ -90,6 +92,8 @@ public:
     IOReturn buildDpConfigStream(GspRpcMessageHeader *msg, uint32_t subdev,
                                  uint32_t head, uint32_t sor,
                                  const GSPModesetParams *params);
+    IOReturn buildDfpGetAttachedIds(GspRpcMessageHeader *msg, uint32_t subdev);
+    IOReturn buildDfpGetInfo(GspRpcMessageHeader *msg, uint32_t subdev, uint32_t displayId);
 
 private:
     uint32_t fSequence;
