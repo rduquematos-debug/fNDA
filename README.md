@@ -13,32 +13,33 @@ to the macOS IOKit framework.
 ## Port Progress
 
 > Percentages reflect what the Makefile actually compiles and what works at runtime.
-> Code in `Src/nvidia/` and `Src/gsp/` exists but is **not yet compiled** — excluded from this table.
+> Tested compilation target: macOS Ventura 13.7.8 (Darwin 22.6.0), Xcode CLT, x86_64.
 
 | Area | % | Bar | Notes |
 |------|---|-----|-------|
+| **Compilation (Makefile)** | **100%** | `██████████` | 15 source files, zero errors, only warnings |
 | Core Device (init, BARs, PCI) | 80% | `████████░░` | Lifecycle works, not bare metal tested |
 | GSP Boot (SEC2 + Falcon) | 60% | `██████░░░░` | SEC2 boots, but GSP_INIT_DONE **never arrives** |
-| GSP RPC (queues, alloc/control) | 50% | `█████░░░░░` | Code complete, **never tested end-to-end** (GSP stalls) |
-| Legacy Display (VPLL, heads, SOR) | 85% | `████████░░` | Most complete subsystem |
+| GSP RPC (queues, alloc/control) | 50% | `█████░░░░░` | Code compiles, **never tested end-to-end** (GSP stalls) |
+| Legacy Display (VPLL, heads, SOR) | 85% | `████████░░` | Most complete subsystem, confirmed working in VM |
 | Framebuffer / IOFramebuffer | 35% | `███░░░░░░░` | Registers in IOReg, **no display output** |
-| NVKMS OS Interface | 30% | `███░░░░░░░` | RM bridge exists, **entry points are stubs** |
+| NVKMS OS Interface | 30% | `███░░░░░░░` | RM bridge compiles, **entry points are stubs** |
 | Userspace (24 methods + gsp_loader) | 90% | `█████████░` | Complete, but boot failure limits usefulness |
-| Firmware Parsing (ELF, NVFW) | 90% | `█████████░` | All parsers work, only verifySig is stub |
-| VBIOS Parsing (DCB/CONN) | 60% | `██████░░░░` | Parsers work, configureEncoder is stub |
+| Firmware Parsing (ELF, NVFW) | 90% | `█████████░` | All parsers compile, only verifySig is stub |
+| VBIOS Parsing (DCB/CONN) | 60% | `██████░░░░` | Parsers compile, configureEncoder is stub |
 | os_compat.h (Linux→macOS layer) | 85% | `████████░░` | 991 lines, very comprehensive |
-| **Overall (compiled code)** | **~60%** | **`██████░░░░`** | **See note below** |
+| **Overall (functional)** | **~60%** | **`██████░░░░`** | **Critical path (GSP+DP) still at 0%** |
 
-> **Reality check:** ~60% of the compiled code is written and functional. The remaining 40% is stubs, broken paths (GSP_INIT_DONE), or untested code. The **critical path to display output** (GSP handshake + DP link training) is still 0%.
+### Compilation Status (macOS Ventura 13.7.8)
 
-### Compiled vs Uncompiled
+| Category | Lines | Size | Status |
+|----------|-------|------|--------|
+| Compiled by Makefile (15 source + headers) | ~6,200 + headers | 310 KB kext | ✅ **Zero errors, 0 warnings as errors** |
+| Embedded blobs (VBIOS, SEC2 firmware) | ~17,900 | Compiled via `#include` | ✅ Linked into kext |
+| `Src/nvidia/*.c` (NVIDIA byte-for-byte ports) | ~1,315 | Not compiled | ❌ **Not in Makefile** |
+| `Src/gsp/*.c` (GSP abstraction layer) | ~150 | Not compiled | ❌ **Not in Makefile** |
 
-| Category | Lines | Status |
-|----------|-------|--------|
-| Compiled by Makefile (15 source files) | ~6,200 | ✅ Actual kext binary |
-| Embedded blobs (VBIOS, SEC2 firmware) | ~17,900 | ✅ Compiled via `#include` |
-| `Src/nvidia/*.c` (NVIDIA byte-for-byte ports) | ~1,315 | ❌ **Not in Makefile** |
-| `Src/gsp/*.c` (GSP abstraction layer) | ~150 | ❌ **Not in Makefile** |
+> **Last verified:** `make clean && make all` — PASS on Darwin 22.6.0 x86_64, Xcode CLT.
 
 ---
 
