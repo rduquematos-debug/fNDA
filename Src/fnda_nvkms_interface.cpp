@@ -1,8 +1,22 @@
 // fnda_nvkms_interface.cpp — NVKMS OS interface implementation over IOKit
 #include "fnda_nvkms_interface.h"
+#include "GA104Device.hpp"
+#include "GSPProtocol.hpp"
 #include <IOKit/IOLib.h>
 #include <string.h>
 #include <kern/thread_call.h>
+
+// Global pointer to active GA104Device
+static GA104Device *gRMDevice = nullptr;
+
+void fnda_nvkms_register_device(GA104Device *dev) {
+    gRMDevice = dev;
+    IOLog("GA104: registered as NVKMS RM device\n");
+}
+
+GA104Device* fnda_nvkms_get_device(void) {
+    return gRMDevice;
+}
 
 #pragma mark - Memory
 
@@ -274,27 +288,38 @@ void nvkms_call_rm(void *ops) {
 
 #pragma mark - RM API bridge implementation (over GA104Device GSP RPC)
 
-// These are weakly-defined — GA104Driver overrides them via GA104GSPRPC.cpp
-IOReturn fnda_nvkms_do_rm_alloc(NvU32 hClient, NvU32 hParent,
-    NvU32 hObject, NvU32 hClass, void *pParams, NvU32 *status) {
-    IOLog("nvkms_rm_alloc: hClient=0x%x hParent=0x%x hObject=0x%x hClass=0x%x\n",
-          (unsigned)hClient, (unsigned)hParent, (unsigned)hObject, (unsigned)hClass);
-    if (status) *status = 0;
-    return kIOReturnUnsupported;
+IOReturn fnda_nvkms_do_rm_alloc(uint32_t hClient, uint32_t hParent,
+    uint32_t hObject, uint32_t hClass, void *pParams, uint32_t *status) {
+    GA104Device *dev = gRMDevice;
+    if (!dev || !dev->getGSPProtocol()) {
+        IOLog("nvkms_rm_alloc: no device\n");
+        if (status) *status = 0xFFFFFFFF;
+        return kIOReturnNotReady;
+    }
+    GSPModesetParams dummy; bzero(&dummy, sizeof(dummy));
+    IOReturn ret = dev->sendGspRpcAllocHandle(hClient, hParent, hObject, hClass,
+                                              pParams, status);
+    return ret;
 }
 
 IOReturn fnda_nvkms_do_rm_control(NvU32 hClient, NvU32 hObject,
     NvU32 cmd, void *pParams, NvU32 paramsSize, NvU32 *status) {
-    IOLog("nvkms_rm_control: hClient=0x%x hObject=0x%x cmd=0x%x sz=%u\n",
-          (unsigned)hClient, (unsigned)hObject, (unsigned)cmd, (unsigned)paramsSize);
-    if (status) *status = 0;
-    return kIOReturnUnsupported;
+    GA104Device *dev = gRMDevice;
+    if (!dev || !dev->getGSPProtocol()) {
+        IOLog("nvkms_rm_control: no device\n");
+        if (status) *status = 0xFFFFFFFF;
+        return kIOReturnNotReady;
+    }
+    IOReturn ret = dev->sendGspRpcControl(hClient, hObject, cmd,
+                                          pParams, paramsSize, status);
+    return ret;
 }
 
 IOReturn fnda_nvkms_do_rm_free(NvU32 hClient, NvU32 hParent, NvU32 hObject) {
-    IOLog("nvkms_rm_free: hClient=0x%x hParent=0x%x hObject=0x%x\n",
-          (unsigned)hClient, (unsigned)hParent, (unsigned)hObject);
-    return kIOReturnSuccess;
+    GA104Device *dev = gRMDevice;
+    if (!dev) return kIOReturnNotReady;
+    IOReturn ret = dev->sendGspRpcFree(hClient, hParent, hObject);
+    return ret;
 }
 
 #pragma mark - Entry points (stubs for now — GA104Device will call these)

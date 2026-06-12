@@ -3,6 +3,7 @@
 #define fnda_nvkms_interface_h
 
 #include <libkern/libkern.h>
+#include <IOKit/IOReturn.h>
 #include <stdarg.h>
 #include <kern/clock.h>
 
@@ -56,6 +57,17 @@ enum NvKmsFailAllocCoreChannelMethod { NVKMS_FAIL_ALLOC_CORE_CHANNEL_RM_SETUP_CO
 extern "C" {
 
 void   nvkms_call_rm(void *ops);
+struct GA104Device;
+void   fnda_nvkms_register_device(struct GA104Device *dev);
+struct GA104Device* fnda_nvkms_get_device(void);
+
+// RM callbacks (implemented in fnda_nvkms_interface.cpp,
+// call GA104Device::sendGspRpc*() via gRMDevice global)
+extern IOReturn fnda_nvkms_do_rm_alloc(uint32_t hClient, uint32_t hParent,
+    uint32_t hObject, uint32_t hClass, void *pParams, uint32_t *status);
+extern IOReturn fnda_nvkms_do_rm_control(uint32_t hClient, uint32_t hObject,
+    uint32_t cmd, void *pParams, uint32_t paramsSize, uint32_t *status);
+extern IOReturn fnda_nvkms_do_rm_free(uint32_t hClient, uint32_t hParent, uint32_t hObject);
 void*  nvkms_alloc(size_t size, NvBool zero);
 void   nvkms_free(void *ptr, size_t size);
 void*  nvkms_memset(void *ptr, NvU8 c, size_t size);

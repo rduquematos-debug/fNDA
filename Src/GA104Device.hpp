@@ -78,6 +78,10 @@ public:
     IOReturn sendGspRpcHeadSetTimings(uint32_t head, uint32_t width, uint32_t height, uint32_t refreshHz);
     IOReturn sendGspRpcHeadSetTimings(uint32_t head, const GSPModesetParams *params);
     IOReturn sendGspRpcFlip(uint32_t head);
+    IOReturn sendGspRpcAllocHandle(uint32_t hClient, uint32_t hParent, uint32_t hObject, uint32_t hClass, void *pParams, uint32_t *status);
+    IOReturn sendGspRpcControl(uint32_t hClient, uint32_t hObject, uint32_t cmd, void *pParams, uint32_t paramsSize, uint32_t *status);
+    IOReturn sendGspRpcFree(uint32_t hClient, uint32_t hParent, uint32_t hObject);
+    GSPProtocol *getGSPProtocol() { return fGSPProtocol; }
     IOReturn fillFramebuffer(uint32_t color);
     IOReturn programVPLL(void);
     IOReturn flipToTriangle(void);

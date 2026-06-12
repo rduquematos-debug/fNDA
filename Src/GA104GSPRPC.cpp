@@ -1429,7 +1429,67 @@ IOReturn GA104Device::gspStartBooter(void)
     writeReg32(FALCON_MAILBOX0, (uint32_t)(fLibosPhys & 0xFFFFFFFF));
     writeReg32(FALCON_MAILBOX1, (uint32_t)((fLibosPhys >> 32) & 0xFFFFFFFF));
     __sync_synchronize();
-
     return kIOReturnSuccess;
+}
+
+#pragma mark - NVKMS RM Bridge
+
+IOReturn GA104Device::sendGspRpcAllocHandle(uint32_t hClient, uint32_t hParent,
+    uint32_t hObject, uint32_t hClass, void *pParams, uint32_t *status)
+{
+    if (!fGSPProtocol) return kIOReturnNotReady;
+    GspRpcMessageHeader msg, reply;
+    uint32_t replySz = 0;
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+
+    fGSPProtocol->buildRmAlloc(&msg, hClient, hParent, hObject, hClass,
+                               (pParams ? sizeof(uint32_t) * 4 : 0), pParams);
+    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    IOReturn ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader),
+        payloadSz, &reply, sizeof(reply), &replySz, 10000);
+    if (ret == kIOReturnSuccess) {
+        GspRmAllocParams *rm = (GspRmAllocParams*)((uint8_t*)&reply + sizeof(GspRpcMessageHeader));
+        if (status) *status = rm->status;
+        if (rm->status == 0) {
+            setProperty("GA104RM_Obj", (uint64_t)rm->hObject, 32);
+        }
+    }
+    return ret;
+}
+
+IOReturn GA104Device::sendGspRpcControl(uint32_t hClient, uint32_t hObject,
+    uint32_t cmd, void *pParams, uint32_t paramsSize, uint32_t *status)
+{
+    if (!fGSPProtocol) return kIOReturnNotReady;
+    GspRpcMessageHeader msg, reply;
+    uint32_t replySz = 0;
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+
+    fGSPProtocol->buildRmControl(&msg, hClient, hObject, cmd, paramsSize, pParams);
+    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    IOReturn ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader),
+        payloadSz, &reply, sizeof(reply), &replySz, 10000);
+    if (ret == kIOReturnSuccess) {
+        GspRmControlParams *rm = (GspRmControlParams*)((uint8_t*)&reply + sizeof(GspRpcMessageHeader));
+        if (status) *status = rm->status;
+    }
+    return ret;
+}
+
+IOReturn GA104Device::sendGspRpcFree(uint32_t hClient, uint32_t hParent, uint32_t hObject)
+{
+    if (!fGSPProtocol) return kIOReturnNotReady;
+    GspRpcMessageHeader msg, reply;
+    uint32_t replySz = 0;
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+
+    uint32_t params[4] = { hClient, hParent, hObject, 0 };
+    fGSPProtocol->buildRmAlloc(&msg, hClient, hParent, hObject, 0, sizeof(params), params);
+    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    return sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader),
+        payloadSz, &reply, sizeof(reply), &replySz, 10000);
 }
 
