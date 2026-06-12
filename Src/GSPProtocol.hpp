@@ -16,6 +16,29 @@
 #define NVKM_GSP_RPC_REPLY_NOSEQ       0
 #define NVKM_GSP_RPC_REPLY_RECV        1
 
+// RM object alloc parameters
+typedef struct {
+    uint32_t hClass;
+    uint32_t hObject;
+    uint32_t status;
+    uint32_t flags;
+} __attribute__((packed)) RMAllocReply;
+
+// NV0080 device alloc parameters (NV01_DEVICE_0)
+typedef struct {
+    uint32_t deviceId;
+    uint32_t hClientShare;
+    uint32_t flags;
+} __attribute__((packed)) NV0080AllocParams;
+
+// NV0073 display alloc parameters
+typedef struct {
+    uint32_t headMask;
+    uint32_t sorMask;
+    uint32_t numHeads;
+    uint32_t numSors;
+} __attribute__((packed)) NV0073AllocParams;
+
 // Display modeset parameters
 typedef struct {
     uint32_t headIndex;
@@ -78,6 +101,15 @@ public:
                             uint32_t cmd, uint32_t paramsSize,
                             const void *params);
 
+    // Convenience allocators (use default handles NVKM_RM_DEVICE, etc.)
+    IOReturn buildAllocDevice(GspRpcMessageHeader *msg, NvHandle hClient,
+                              NvHandle hDevice, uint32_t deviceId);
+    IOReturn buildAllocSubdevice(GspRpcMessageHeader *msg, NvHandle hClient,
+                                 NvHandle hDevice, NvHandle hSubdevice);
+    IOReturn buildAllocDisp(GspRpcMessageHeader *msg, NvHandle hClient,
+                            NvHandle hSubdevice, NvHandle hDisp,
+                            uint32_t headMask, uint32_t sorMask);
+
     // Display RPCs
     IOReturn buildDisplayGetNumHeads(GspRpcMessageHeader *msg, uint32_t subdev);
     IOReturn buildDisplayGetSupported(GspRpcMessageHeader *msg, uint32_t subdev);
@@ -94,6 +126,15 @@ public:
                                  const GSPModesetParams *params);
     IOReturn buildDfpGetAttachedIds(GspRpcMessageHeader *msg, uint32_t subdev);
     IOReturn buildDfpGetInfo(GspRpcMessageHeader *msg, uint32_t subdev, uint32_t displayId);
+    IOReturn buildDpLinkConfig(GspRpcMessageHeader *msg, uint32_t subdev,
+                               uint32_t displayId, uint32_t laneCount,
+                               uint32_t linkBw, uint32_t postCursor, uint32_t preEmphasis);
+    IOReturn buildHeadSetControl(GspRpcMessageHeader *msg, uint32_t subdev,
+                                 uint32_t head, uint32_t sor, uint32_t protocol);
+    IOReturn buildHeadSetTimings(GspRpcMessageHeader *msg, uint32_t subdev,
+                                 uint32_t head, const GSPModesetParams *params);
+    IOReturn buildFlip(GspRpcMessageHeader *msg, uint32_t subdev,
+                       uint32_t head, uint64_t surfaceAddr, uint32_t pitch);
 
 private:
     uint32_t fSequence;

@@ -34,233 +34,99 @@ IOReturn GSPProtocol::buildMsg(GspRpcMessageHeader *msg, uint32_t function,
     return kIOReturnSuccess;
 }
 
-IOReturn GSPProtocol::buildSetSystemInfo(GspRpcMessageHeader *msg,
-                                          uint64_t bar0Phys, uint64_t bar1Phys,
-                                          uint64_t bar2Phys, uint32_t deviceID,
-                                          uint32_t subDeviceID, uint32_t revision,
-                                          uint64_t nvDomainBusDeviceFunc)
+IOReturn GSPProtocol::buildAllocDevice(GspRpcMessageHeader *msg,
+                                        NvHandle hClient,
+                                        NvHandle hDevice, uint32_t deviceId)
 {
-    GspSystemInfo sysInfo;
-
-    bzero(&sysInfo, sizeof(sysInfo));
-    sysInfo.gpuPhysAddr = bar0Phys;
-    sysInfo.gpuPhysFbAddr = bar1Phys;
-    sysInfo.gpuPhysInstAddr = bar2Phys;
-    sysInfo.nvDomainBusDeviceFunc = nvDomainBusDeviceFunc;
-    sysInfo.maxUserVa = 0x7FFFFFFFFFFFULL;
-    sysInfo.PCIDeviceID = deviceID;
-    sysInfo.PCISubDeviceID = subDeviceID;
-    sysInfo.PCIRevisionID = revision;
-    sysInfo.hostPageSize = 0x1000; // 4K
-
-    return buildMsg(msg, NV_VGPU_MSG_FUNCTION_GSP_SET_SYSTEM_INFO,
-                    sizeof(sysInfo), ++fSequence);
+    NV0080AllocParams params;
+    bzero(&params, sizeof(params));
+    params.deviceId = deviceId;
+    params.hClientShare = hClient;
+    params.flags = 0;
+    return buildRmAlloc(msg, hClient, hClient, hDevice,
+                        NV01_DEVICE_0, sizeof(params), &params);
 }
 
-IOReturn GSPProtocol::buildSetRegistry(GspRpcMessageHeader *msg,
-                                        uint32_t buf[], uint32_t *len)
+IOReturn GSPProtocol::buildAllocSubdevice(GspRpcMessageHeader *msg,
+                                           NvHandle hClient,
+                                           NvHandle hDevice,
+                                           NvHandle hSubdevice)
 {
-    // Build PACKED_REGISTRY_TABLE with minimal entries
-    struct regEntry {
-        uint32_t keyLen;     // key string length including null
-        uint32_t dataType;   // 1 = uint32
-        uint32_t dataLen;    // 4
-        char     key[32];    // key string
-        uint32_t value;      // value
-    } __attribute__((packed));
-
-    struct {
-        uint32_t size;
-        uint32_t numEntries;
-        struct regEntry entries[];
-    } __attribute__((packed)) *reg;
-
-    uint32_t totalSize = sizeof(uint32_t) * 2 + sizeof(struct regEntry) * 3;
-    if (!buf || !len || *len < totalSize) return kIOReturnNoSpace;
-
-    bzero(buf, totalSize);
-    reg = (decltype(reg))buf;
-    reg->numEntries = 3;
-
-    // Entry 1: RMSecBusResetEnable = 1
-    reg->entries[0].keyLen = 20;
-    reg->entries[0].dataType = 1;
-    reg->entries[0].dataLen = 4;
-    memcpy(reg->entries[0].key, "RMSecBusResetEnable", 20);
-    reg->entries[0].value = 1;
-
-    // Entry 2: RMForcePcieConfigSave = 1
-    reg->entries[1].keyLen = 23;
-    reg->entries[1].dataType = 1;
-    reg->entries[1].dataLen = 4;
-    memcpy(reg->entries[1].key, "RMForcePcieConfigSave", 23);
-    reg->entries[1].value = 1;
-
-    // Entry 3: RMDevidCheckIgnore = 1
-    reg->entries[2].keyLen = 19;
-    reg->entries[2].dataType = 1;
-    reg->entries[2].dataLen = 4;
-    memcpy(reg->entries[2].key, "RMDevidCheckIgnore", 19);
-    reg->entries[2].value = 1;
-
-    reg->size = totalSize;
-    *len = totalSize;
-
-    return buildMsg(msg, NV_VGPU_MSG_FUNCTION_SET_REGISTRY,
-                    totalSize, ++fSequence);
+    uint32_t index = 0;
+    return buildRmAlloc(msg, hClient, hDevice, hSubdevice,
+                        0x20800000 | index, sizeof(index), &index);
 }
 
-IOReturn GSPProtocol::buildGetStaticInfo(GspRpcMessageHeader *msg)
+IOReturn GSPProtocol::buildAllocDisp(GspRpcMessageHeader *msg,
+                                      NvHandle hClient,
+                                      NvHandle hSubdevice,
+                                      NvHandle hDisp,
+                                      uint32_t headMask, uint32_t sorMask)
 {
-    return buildMsg(msg, 0x41, 0, ++fSequence);
+    NV0073AllocParams params;
+    bzero(&params, sizeof(params));
+    params.headMask = headMask;
+    params.sorMask = sorMask;
+    params.numHeads = 4;
+    params.numSors = 4;
+    return buildRmAlloc(msg, hClient, hSubdevice, hDisp,
+                        0x00730000, sizeof(params), &params);
 }
 
-IOReturn GSPProtocol::buildRmAlloc(GspRpcMessageHeader *msg,
-                                    NvHandle hClient, NvHandle hParent,
-                                    NvHandle hObject, uint32_t hClass,
-                                    uint32_t paramsSize, const void *params)
+IOReturn GSPProtocol::buildDpLinkConfig(GspRpcMessageHeader *msg,
+                                         uint32_t subdev, uint32_t displayId,
+                                         uint32_t laneCount, uint32_t linkBw,
+                                         uint32_t postCursor, uint32_t preEmphasis)
 {
-    // Build alloc params after the RPC header
-    struct {
-        NvHandle hClient;
-        NvHandle hParent;
-        NvHandle hObject;
-        uint32_t hClass;
-        uint32_t status;
-        uint32_t paramsSize;
-        uint32_t flags;
-    } __attribute__((packed)) rpc;
-
-    bzero(&rpc, sizeof(rpc));
-    rpc.hClient = hClient;
-    rpc.hParent = hParent;
-    rpc.hObject = hObject;
-    rpc.hClass = hClass;
-    rpc.status = 0xFFFFFFFF;
-    rpc.paramsSize = paramsSize;
-    rpc.flags = 0;
-
-    IOReturn ret = buildMsg(msg, NV_VGPU_MSG_FUNCTION_GSP_RM_ALLOC,
-                            sizeof(rpc) + paramsSize, ++fSequence);
-    if (ret != kIOReturnSuccess) return ret;
-
-    // Copy alloc params after the RPC header
-    uint8_t *rpcEnd = (uint8_t*)msg + sizeof(GspRpcMessageHeader);
-    memcpy(rpcEnd, &rpc, sizeof(rpc));
-    if (params && paramsSize > 0)
-        memcpy(rpcEnd + sizeof(rpc), params, paramsSize);
-
-    return kIOReturnSuccess;
-}
-
-IOReturn GSPProtocol::buildRmControl(GspRpcMessageHeader *msg,
-                                      NvHandle hClient, NvHandle hObject,
-                                      uint32_t cmd, uint32_t paramsSize,
-                                      const void *params)
-{
-    struct {
-        NvHandle hClient;
-        NvHandle hObject;
-        uint32_t cmd;
-        uint32_t status;
-        uint32_t paramsSize;
-        uint32_t flags;
-    } __attribute__((packed)) rpc;
-
-    bzero(&rpc, sizeof(rpc));
-    rpc.hClient = hClient;
-    rpc.hObject = hObject;
-    rpc.cmd = cmd;
-    rpc.status = 0xFFFFFFFF;
-    rpc.paramsSize = paramsSize;
-    rpc.flags = 0;
-
-    IOReturn ret = buildMsg(msg, NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL,
-                            sizeof(rpc) + paramsSize, ++fSequence);
-    if (ret != kIOReturnSuccess) return ret;
-
-    uint8_t *rpcEnd = (uint8_t*)msg + sizeof(GspRpcMessageHeader);
-    memcpy(rpcEnd, &rpc, sizeof(rpc));
-    if (params && paramsSize > 0)
-        memcpy(rpcEnd + sizeof(rpc), params, paramsSize);
-
-    return kIOReturnSuccess;
-}
-
-IOReturn GSPProtocol::buildDisplayGetNumHeads(GspRpcMessageHeader *msg,
-                                               uint32_t subdev)
-{
-    uint32_t params[] = { subdev };
+    // NV0073_CTRL_CMD_DP_SET_LINK_CONFIG
+    uint32_t params[] = { subdev, displayId, laneCount, linkBw, postCursor, preEmphasis };
     return buildRmControl(msg, 0, subdev,
-                          NV0073_CTRL_CMD_SYSTEM_GET_NUM_HEADS,
+                          NV0073_CTRL_CMD_DP_SET_LINK_CONFIG,
                           sizeof(params), params);
 }
 
-IOReturn GSPProtocol::buildDisplayGetSupported(GspRpcMessageHeader *msg,
-                                                uint32_t subdev)
+IOReturn GSPProtocol::buildHeadSetControl(GspRpcMessageHeader *msg,
+                                           uint32_t subdev, uint32_t head,
+                                           uint32_t sor, uint32_t protocol)
 {
-    uint32_t params[] = { subdev };
+    // NV0073_CTRL_CMD_HEAD_SET_CONTROL
+    // Configures head -> SOR routing and protocol (TMDS/DP)
+    uint32_t params[] = { subdev, head, sor, protocol, 0 };
     return buildRmControl(msg, 0, subdev,
-                          NV0073_CTRL_CMD_SYSTEM_GET_SUPPORTED,
+                          NV0073_CTRL_CMD_HEAD_SET_CONTROL,
                           sizeof(params), params);
 }
 
-IOReturn GSPProtocol::buildOrGetInfo(GspRpcMessageHeader *msg,
-                                      uint32_t subdev, uint32_t displayId)
+IOReturn GSPProtocol::buildHeadSetTimings(GspRpcMessageHeader *msg,
+                                           uint32_t subdev, uint32_t head,
+                                           const GSPModesetParams *params)
 {
-    uint32_t params[] = { subdev, displayId };
+    // NV0073_CTRL_CMD_HEAD_SET_TIMING
+    // Set raster timings for a head (resolution, sync, blank)
+    if (!params) return kIOReturnBadArgument;
+    uint32_t buf[32];
+    bzero(buf, sizeof(buf));
+    buf[0] = subdev;
+    buf[1] = head;
+    memcpy(&buf[2], params, sizeof(GSPModesetParams));
     return buildRmControl(msg, 0, subdev,
-                          NV0073_CTRL_CMD_SPECIFIC_OR_GET_INFO,
-                          sizeof(params), params);
+                          NV0073_CTRL_CMD_HEAD_SET_TIMING,
+                          sizeof(buf), buf);
 }
 
-IOReturn GSPProtocol::buildDpAuxRead(GspRpcMessageHeader *msg,
-                                      uint32_t subdev, uint32_t displayId,
-                                      uint32_t addr, uint32_t size)
+IOReturn GSPProtocol::buildFlip(GspRpcMessageHeader *msg,
+                                 uint32_t subdev, uint32_t head,
+                                 uint64_t surfaceAddr, uint32_t pitch)
 {
-    uint32_t params[] =     {
-        subdev, displayId,
-        0,       // bAddrOnly = 0
-        0x09,    // cmd = DPCD READ
-        addr,
-        size - 1 // size encoded as bytes-1
+    // NV0073_CTRL_CMD_FLIP
+    // Flip to a new scanout surface
+    uint32_t params[] = {
+        subdev, head,
+        (uint32_t)(surfaceAddr & 0xFFFFFFFF),
+        (uint32_t)(surfaceAddr >> 32),
+        pitch, 0
     };
     return buildRmControl(msg, 0, subdev,
-                          NV0073_CTRL_CMD_DP_AUXCH_CTRL,
-                          sizeof(params), params);
-}
-
-IOReturn GSPProtocol::buildDfpGetAttachedIds(GspRpcMessageHeader *msg,
-                                              uint32_t subdev)
-{
-    // NV0073_CTRL_CMD_DFP_GET_ATTACHED_IDS
-    // Params: subdevice, flags
-    // Returns: bitmask of attached display IDs
-    uint32_t params[] = { subdev, 0 };
-    return buildRmControl(msg, 0, subdev,
-                          NV0073_CTRL_CMD_DFP_GET_ATTACHED_IDS,
-                          sizeof(params), params);
-}
-
-IOReturn GSPProtocol::buildDfpGetInfo(GspRpcMessageHeader *msg,
-                                       uint32_t subdev, uint32_t displayId)
-{
-    // NV0073_CTRL_CMD_DFP_GET_INFO
-    // Params: subdevice, displayId, flags
-    // Returns: connector type, pad info, SOR capabilities
-    uint32_t params[] = { subdev, displayId, 0 };
-    return buildRmControl(msg, 0, subdev,
-                          NV0073_CTRL_CMD_DFP_GET_INFO,
-                          sizeof(params), params);
-}
-
-IOReturn GSPProtocol::buildOrAssign(GspRpcMessageHeader *msg,
-                                     uint32_t subdev, uint32_t displayId,
-                                     uint32_t sorExcludeMask, uint32_t protocol)
-{
-    // NV0073_CTRL_CMD_DFP_ASSIGN_SOR
-    uint32_t params[] = { subdev, displayId, sorExcludeMask, protocol, 0, 0 };
-    return buildRmControl(msg, 0, subdev,
-                          NV0073_CTRL_CMD_DFP_ASSIGN_SOR,
+                          NV0073_CTRL_CMD_FLIP,
                           sizeof(params), params);
 }

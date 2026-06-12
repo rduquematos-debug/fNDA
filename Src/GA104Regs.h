@@ -666,6 +666,10 @@ typedef struct {
 #define NV0073_CTRL_CMD_DFP_GET_ATTACHED_IDS                 0x0073013A
 #define NV0073_CTRL_CMD_DFP_GET_INFO                          0x731140
 #define NV0073_CTRL_CMD_DFP_ASSIGN_SOR                        0x731152
+#define NV0073_CTRL_CMD_DP_SET_LINK_CONFIG                    0x731145
+#define NV0073_CTRL_CMD_HEAD_SET_CONTROL                      0x731220
+#define NV0073_CTRL_CMD_HEAD_SET_TIMING                       0x731221
+#define NV0073_CTRL_CMD_FLIP                                  0x731204
 
 typedef uint32_t NvHandle;
 
