@@ -1,8 +1,9 @@
 KEXT_NAME = GA104Driver
 KEXT_ID = com.nvidia.driver.GA104
 
-SRC = GA104Device.cpp GA104GSPBoot.cpp GA104GSPRPC.cpp GA104Display.cpp GA104FBProvider.cpp GA104Framebuffer.cpp GA104UserClient.cpp GSPFirmware.cpp GSPFirmwareParser.cpp GSPQueue.cpp GSPProtocol.cpp VBIOSDisplay.cpp KmodInfo.cpp fnda_nvkms_interface.cpp
+SRC = GA104Device.cpp GA104GSPBoot.cpp GA104GSPRPC.cpp GA104Display.cpp GA104FBProvider.cpp GA104Framebuffer.cpp GA104UserClient.cpp GSPFirmware.cpp GSPFirmwareParser.cpp GSPQueue.cpp GSPProtocol.cpp VBIOSDisplay.cpp KmodInfo.cpp fnda_nvkms_interface.cpp nvkms-rmapi.c
 OBJ = $(SRC:.cpp=.o)
+OBJ := $(OBJ:.c=.o)
 HDR = GA104Device.hpp GA104FBProvider.hpp GA104Framebuffer.hpp GA104UserClient.hpp GSPFirmware.hpp GSPQueue.hpp GSPProtocol.hpp VBIOSDisplay.hpp
 
 SDKROOT = $(shell xcrun --show-sdk-path)
@@ -46,6 +47,9 @@ resources:
 
 %.o: %.cpp $(HDR)
 	$(CXX) $(CXXFLAGS) -o $@ $<
+
+nvkms-rmapi.o: nvkms-rmapi.c $(HDR)
+	$(CXX) $(CXXFLAGS) -x c++ -o $@ $<
 
 install: $(KEXT_BIN) $(KEXT_INFO) resources
 	cp -r $(KEXT_DIR) /tmp/$(KEXT_NAME).kext
