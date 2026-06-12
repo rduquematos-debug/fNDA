@@ -5,9 +5,9 @@
 #include <IOKit/pci/IOPCIDevice.h>
 #include <IOKit/IOService.h>
 
-// Display pushbuffer sizes
-#define DISP_PB_CORE_SIZE         0x10000
-#define DISP_PB_WINDOW_SIZE        0x10000
+// Display pushbuffer sizes (defined in GA104Regs.h)
+// #define DISP_PB_CORE_SIZE         0x10000
+// #define DISP_PB_WINDOW_SIZE        0x10000
 
 // SEC2 register access (PSEC2 = 0x00110000 + offset)
 #define SEC2_REG(off, val) writeAbsReg32(NV_PSEC_BASE + (off), (val))

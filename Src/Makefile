@@ -1,7 +1,7 @@
 KEXT_NAME = GA104Driver
 KEXT_ID = com.nvidia.driver.GA104
 
-SRC = GA104Device.cpp GA104FBProvider.cpp GA104Framebuffer.cpp GA104UserClient.cpp GSPFirmware.cpp GSPFirmwareParser.cpp GSPQueue.cpp GSPProtocol.cpp VBIOSDisplay.cpp KmodInfo.cpp
+SRC = GA104Device.cpp GA104GSPBoot.cpp GA104GSPRPC.cpp GA104Display.cpp GA104FBProvider.cpp GA104Framebuffer.cpp GA104UserClient.cpp GSPFirmware.cpp GSPFirmwareParser.cpp GSPQueue.cpp GSPProtocol.cpp VBIOSDisplay.cpp KmodInfo.cpp
 OBJ = $(SRC:.cpp=.o)
 HDR = GA104Device.hpp GA104FBProvider.hpp GA104Framebuffer.hpp GA104UserClient.hpp GSPFirmware.hpp GSPQueue.hpp GSPProtocol.hpp VBIOSDisplay.hpp
 

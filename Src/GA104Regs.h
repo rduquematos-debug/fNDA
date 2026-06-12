@@ -1218,4 +1218,17 @@ typedef struct {
 
 #pragma pack(pop)
 
+// DMA size encoding: converts byte size to Falcon DMATRFCMD size field
+static inline uint32_t dma_size_encoding(uint32_t size)
+{
+    uint32_t blocks = (size + 255) / 256;
+    uint32_t log2 = 0;
+    uint32_t tmp = 1;
+    while (tmp < blocks && log2 < 7) {
+        tmp <<= 1;
+        log2++;
+    }
+    return (log2 & 0x7) << 8;
+}
+
 #endif /* GA104_REGS_H */
