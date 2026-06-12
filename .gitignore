@@ -27,4 +27,10 @@ tools/vm-*.sh
 .vscode/
 .idea/
 
+# Private project files (not for GitHub)
+.opencode/plans/
+REGRAS.md
+README_PROJETO.md
+README_BAREMETAL.md
+
 

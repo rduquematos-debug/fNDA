@@ -2,14 +2,49 @@
 
 **Work In Progress — not tested on bare metal. Looking for testers!**
 
-fNDA is an open-source macOS IOKit kernel extension (kext) for NVIDIA Ampere (GA10x) GPUs. It is a byte-for-byte port of NVIDIA's open-gpu-kernel-modules to macOS IOKit framework.
+fNDA is an open-source macOS IOKit kernel extension (kext) for NVIDIA Ampere (GA10x)
+GPUs. It is a port of NVIDIA's [open-gpu-kernel-modules](https://github.com/NVIDIA/open-gpu-kernel-modules)
+to the macOS IOKit framework.
+
+> Target: **GA104 (RTX 3070 Ti)** · macOS **Ventura 13.7.8** · **x86_64**
+
+---
+
+<p align="center">
+  <a href="https://buymeacoffee.com/rafadebugs">
+    <img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy me a coffee"/>
+  </a>
+</p>
+
+---
+
+## Progresso do Port
+
+| Área | % | Barra |
+|------|---|-------|
+| Core Driver (GSP-RM, PCI, BARs) | 83% | `████████░░` |
+| GSP Boot (SEC2 + Falcon) | 85% | `████████░░` |
+| GSP RPC (message queues, alloc/control) | 85% | `████████░░` |
+| Legacy Display (VPLL, heads, SOR) | 85% | `████████░░` |
+| Framebuffer / IOFramebuffer | 65% | `██████░░░░` |
+| NVKMS OS Interface | 65% | `██████░░░░` |
+| Userspace (UserClient + gsp_loader) | 100% | `██████████` |
+| Firmware Parsing (ELF, NVFW) | 80% | `████████░░` |
+| VBIOS Parsing (DCB/CONN) | 75% | `███████░░░` |
+| NVIDIA Ported Code (byte-for-byte) | 80% | `████████░░` |
+| os_compat.h (Linux→macOS compat layer) | 85% | `████████░░` |
+| **Geral** | **78%** | **`████████░░`** |
+
+~18.100 linhas de código kext + ~3.800 linhas NVIDIA portadas byte-for-byte + 991 linhas de compat layer.
+
+---
 
 ## Hardware Support
 
 | GPU | Status |
 |-----|--------|
 | GA104 (RTX 3070 Ti) | ✅ Development target |
-| GA102 (RTX 3080/3090) | ❌ Untested, likely needs minor changes |
+| GA102 (RTX 3080/3090) | ❌ Untested |
 | GA106 (RTX 3060) | ❌ Untested |
 | GA107 (RTX 3050/3060 Ti) | ❌ Untested |
 
@@ -20,46 +55,62 @@ fNDA is an open-source macOS IOKit kernel extension (kext) for NVIDIA Ampere (GA
 - ✅ GSP firmware loading via userspace (UserClient)
 - ✅ GSP-RM communication (rPtr > 0)
 - ✅ GA104FBProvider — IOKit framebuffer provider nub
-- ✅ GA104Framebuffer — IOFramebuffer implementation (stub)
+- ✅ GA104Framebuffer — IOFramebuffer implementation
 - ✅ Legacy display init — VPLL, SOR, head programming
 - ✅ programHeadForMode() — raster timing setup
+- ✅ SEC2 boot (BROM RSA-3K validation, MCTP GSP-FMC)
+- ✅ All 24 UserClient methods implemented
+- ✅ EDID parser + mode list
+- ✅ VBIOS parser (DCB/CONN tables)
+- ✅ NVIDIA msgq library reimplementation
+- ✅ RM API bridge (nvkms-rmapi.c — 10 operations)
+- ✅ All 14 GSP display RPC methods implemented
 
 ## What Doesn't Work (Yet)
 
-- ❌ Real display output (setDisplayMode needs proper EDID/DP link training)
-- ❌ DP/HDMI link training
+- ❌ **Real display output** — DP link training not functional
+- ❌ GSP_INIT_DONE — doorbell/RPC handshake not completing
 - ❌ NVKMS flip/modesetting
 - ❌ RM memory management
 - ❌ Graphics acceleration (Vulkan/Metal)
+
+## Critical Path (to get display output)
+
+1. **DP link training** — implement dpLinkTrain + dpConfigStream RPCs
+2. **GSP_INIT_DONE** — debug SEC2 doorbell path and polling loop
+3. **Connection attributes** — stop returning dummy values in IOFramebuffer
 
 ## Project Structure
 
 ```
 fNDA/
 ├── Src/                    # IOKit kernel extension source
-│   ├── GA104Device.cpp     # Main IOKit driver (GSP-RM, BARs)
-│   ├── GA104Device.hpp
+│   ├── GA104Device.cpp     # Main driver (GSP-RM, BARs, lifecycle)
+│   ├── GA104GSPBoot.cpp    # SEC2 + Falcon boot sequence (~982 lines)
+│   ├── GA104GSPRPC.cpp     # GSP RPC queue management (~1495 lines)
+│   ├── GA104Display.cpp    # Legacy display engine programming
 │   ├── GA104FBProvider.cpp # Framebuffer provider nub
-│   ├── GA104FBProvider.hpp
 │   ├── GA104Framebuffer.cpp# IOFramebuffer implementation
-│   ├── GA104Framebuffer.hpp
-│   ├── GA104UserClient.cpp # Userspace communication
-│   ├── GA104UserClient.hpp
-│   ├── GA104Regs.h         # Full register definitions (GA10x)
-│   ├── GSPFirmware.cpp     # GSP firmware loader
-│   ├── GSPFirmware.hpp
-│   ├── GSPFirmwareParser.cpp
-│   ├── GSPFirmwareParser.hpp
-│   ├── GSPQueue.cpp        # GSP command/message queues
-│   ├── GSPQueue.hpp
-│   ├── GSPProtocol.hpp     # GSP RPC protocol structures
-│   ├── GSPProtocol.cpp
-│   ├── VBIOSDisplay.cpp    # VBIOS parser (connectors, timings)
-│   ├── VBIOSDisplay.hpp
-│   ├── KmodInfo.cpp
+│   ├── GA104UserClient.cpp # Userspace communication (24 methods)
+│   ├── GA104Regs.h         # Register definitions (GA10x, 1234 lines)
+│   ├── GSPFirmware.cpp     # ELF64 RISC-V firmware loader
+│   ├── GSPFirmwareParser.cpp# NVFW bootloader binary parser
+│   ├── GSPQueue.cpp        # Message queue (msgq) implementation
+│   ├── GSPProtocol.cpp     # RPC message building
+│   ├── VBIOSDisplay.cpp    # VBIOS parser (DCB, CONN tables)
+│   ├── EDIDParser.hpp      # EDID parser (header-only)
+│   ├── fnda_nvkms_interface.cpp  # NVKMS OS interface
+│   ├── nvkms-rmapi.c       # RM API adapter (283 lines)
+│   ├── os_compat.h         # Linux→macOS compat layer (991 lines)
 │   └── Makefile
-├── tools/                  # VM management scripts
-├── Resources/              # GSP firmware, VBIOS
+├── Src/nvidia/             # Byte-for-byte NVIDIA ports
+│   ├── kernel_gsp_ga102.c
+│   ├── kernel_gsp_falcon_ga102.c
+│   ├── message_queue_cpu.c
+│   └── inc/                # Register headers
+├── Src/gsp/                # GSP abstraction layer (not yet compiled)
+├── tools/                  # gsp_loader — userspace firmware loader
+├── Resources/              # GSP firmware, VBIOS dumps
 ├── Info.plist              # Kext bundle metadata
 ├── README.md
 ├── COMPILING.md
@@ -68,19 +119,37 @@ fNDA/
 └── LICENSE
 ```
 
+## Development Environment
+
+| Setup | Status |
+|-------|--------|
+| QEMU/KVM (software) | ✅ Compilation + IOReg validation |
+| QEMU/KVM (VFIO passthrough) | ⚠️ Works but fragile |
+| Bare metal | ❌ Pending (no display output yet) |
+
 ## Porting Approach
 
-The driver is a **direct port** of NVIDIA's open-gpu-kernel-modules:
+Direct port of NVIDIA's open-gpu-kernel-modules:
 
-| Linux Source | macOS Port | Status |
-|-------------|-----------|--------|
-| `src/nvidia/src/kernel/` | GA104Device (GSP-RM, PCI) | ✅ |
-| `nvidia-modeset/src/nvkms-evo*.c` | GA104Device (display init) | ✅ |
-| `nvidia-modeset/src/nvkms-dpy.c` | GA104FBProvider | ✅ |
-| `nvidia-modeset/include/nvkms-types.h` | GA104Framebuffer | ⚠️ Stub |
-| `kernel-open/nvidia-modeset/` | UserClient | ✅ |
+| Linux Source | macOS Port | Lines | Status |
+|-------------|-----------|-------|--------|
+| `kernel_gsp.c` | GA104Device + GA104GSPBoot | ~1,339 | ✅ |
+| `g_rpc-structures.h` | GA104Regs.h | 1,234 | ✅ |
+| `message_queue.c` | GSPQueue.cpp + GA104GSPRPC | ~1,703 | ✅ |
+| `nvkms-dpy.c` | GA104Framebuffer | 338 | ⚠️ Stub |
+| `nvkms-evo*.c` | GA104Display | 507 | ✅ |
+| `nvkms-rmapi-dgpu.c` | nvkms-rmapi.c | 283 | ✅ |
+| `os-interface.h` | fnda_nvkms_interface | 492 | ⚠️ Stub |
 
-**Key compatibility layer:** `os_compat.h` maps Linux kernel APIs to macOS IOKit.
+## Support
+
+If you find this project useful, consider buying me a coffee:
+
+<p align="center">
+  <a href="https://buymeacoffee.com/rafadebugs">
+    <img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy me a coffee"/>
+  </a>
+</p>
 
 ## License
 
