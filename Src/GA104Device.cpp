@@ -112,6 +112,7 @@ bool GA104Device::init(OSDictionary *dict)
     memset(&fGOP, 0, sizeof(fGOP));
     memset(fEDID, 0, sizeof(fEDID));
     fEDIDSize = 0;
+    fRmRoot = 0; fRmDevice = 0; fRmSubdevice = 0; fRmDisp = 0;
 
     return true;
 }
@@ -609,6 +610,77 @@ IOReturn GA104Device::sendGspRpcAllocRoot()
     return rpcRet;
 }
 
+IOReturn GA104Device::sendGspRpcAllocDisplayChain()
+{
+    if (!fGSPProtocol) return kIOReturnNotReady;
+    IOLog("GA104: Allocating RM display objects...\n");
+
+    // 1. ALLOC_DEVICE (NV01_DEVICE_0)
+    GspRpcMessageHeader msg, reply;
+    uint32_t replySz = 0;
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+
+    // Use NVKM_RM handles from GSPProtocol.hpp
+    NvHandle hClient = NVKM_RM_DEVICE;   // client = device handle
+    NvHandle hDevice = NVKM_RM_SUBDEVICE; // device handle
+    NvHandle hSubdevice = 0x5D1D0001;    // subdevice handle
+    NvHandle hDisp = NVKM_RM_DISP;       // display handle
+
+    fGSPProtocol->buildAllocDevice(&msg, hClient, hDevice, 0);
+    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    IOReturn ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader), payloadSz,
+        &reply, sizeof(reply), &replySz, 10000);
+    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
+        GspRmAllocParams *out = (GspRmAllocParams*)((uint8_t*)&reply + sizeof(GspRpcMessageHeader));
+        fRmRoot = 0;
+        fRmDevice = out->hObject;
+        setProperty("GA104RM_Device", (uint64_t)fRmDevice, 32);
+        IOLog("GA104: ALLOC_DEVICE -> handle 0x%x\n", fRmDevice);
+    } else {
+        IOLog("GA104: ALLOC_DEVICE failed (rpc=0x%x, ret=0x%x)\n", reply.rpcResult, ret);
+        return ret;
+    }
+
+    // 2. ALLOC_SUBDEVICE
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+    fGSPProtocol->buildAllocSubdevice(&msg, hClient, fRmDevice, hSubdevice);
+    payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader), payloadSz,
+        &reply, sizeof(reply), &replySz, 10000);
+    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
+        GspRmAllocParams *out = (GspRmAllocParams*)((uint8_t*)&reply + sizeof(GspRpcMessageHeader));
+        fRmSubdevice = out->hObject;
+        setProperty("GA104RM_Subdevice", (uint64_t)fRmSubdevice, 32);
+        IOLog("GA104: ALLOC_SUBDEVICE -> handle 0x%x\n", fRmSubdevice);
+    } else {
+        IOLog("GA104: ALLOC_SUBDEVICE failed (rpc=0x%x, ret=0x%x)\n", reply.rpcResult, ret);
+        return ret;
+    }
+
+    // 3. ALLOC_DISP (NV0073)
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+    fGSPProtocol->buildAllocDisp(&msg, hClient, fRmSubdevice, hDisp, 0x0F, 0x0F);
+    payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader), payloadSz,
+        &reply, sizeof(reply), &replySz, 10000);
+    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
+        GspRmAllocParams *out = (GspRmAllocParams*)((uint8_t*)&reply + sizeof(GspRpcMessageHeader));
+        fRmDisp = out->hObject;
+        setProperty("GA104RM_Disp", (uint64_t)fRmDisp, 32);
+        IOLog("GA104: ALLOC_DISP -> handle 0x%x\n", fRmDisp);
+    } else {
+        IOLog("GA104: ALLOC_DISP failed (rpc=0x%x, ret=0x%x)\n", reply.rpcResult, ret);
+        return ret;
+    }
+
+    setProperty("GA104_RM_ChainDone", true);
+    IOLog("GA104: RM display chain allocated successfully\n");
+    return kIOReturnSuccess;
+}
+
 // --- Fill framebuffer with solid color (red = 0x000000FF BGRA) ---
 IOReturn GA104Device::fillFramebuffer(uint32_t color)
 {
@@ -1102,7 +1174,12 @@ IOReturn GA104Device::bootGSP()
         setProperty("GA104_FinalrPtr", finalRp, 32);
 
         IOLog("GA104: DEBUG calling sendGspRpcAllocRoot()\n");
-        return sendGspRpcAllocRoot();
+        IOReturn rootRet = sendGspRpcAllocRoot();
+        if (rootRet == kIOReturnSuccess) {
+            IOLog("GA104: ALLOC_ROOT OK, allocating display chain...\n");
+            sendGspRpcAllocDisplayChain();
+        }
+        return rootRet;
     }
 
     // SEC2 failed — try GSP Falcon booter (if bootloader available)
@@ -1204,7 +1281,12 @@ IOReturn GA104Device::bootGSP()
         IOLog("GA104: Final cmdq wPtr=%u rPtr=%u\n", fwp, frp);
         setProperty("GA104_FinalwPtr", fwp, 32);
         setProperty("GA104_FinalrPtr", frp, 32);
-        return sendGspRpcAllocRoot();
+        IOReturn rootRet2 = sendGspRpcAllocRoot();
+        if (rootRet2 == kIOReturnSuccess) {
+            IOLog("GA104: ALLOC_ROOT OK (2), allocating display chain...\n");
+            sendGspRpcAllocDisplayChain();
+        }
+        return rootRet2;
     }
 
     return kIOReturnTimeout;

@@ -68,6 +68,7 @@ public:
                          GspRpcMessageHeader *reply, uint32_t replyMaxSize,
                          uint32_t *replySize, uint32_t timeoutMs);
     IOReturn sendGspRpcAllocRoot(void);
+    IOReturn sendGspRpcAllocDisplayChain(void);
     IOReturn fillFramebuffer(uint32_t color);
     IOReturn programVPLL(void);
     IOReturn flipToTriangle(void);
@@ -188,6 +189,12 @@ private:
     uint32_t         fLastMsgqRp;
     uint8_t         *fFwImageData;     // saved fwImg pointer for post-boot VRAM re-copy
     uint32_t         fFwImageSize;
+
+    // RM object handles (from GSP allocs)
+    NvHandle         fRmRoot;
+    NvHandle         fRmDevice;
+    NvHandle         fRmSubdevice;
+    NvHandle         fRmDisp;
 
     // GOP preserved state
     struct {
