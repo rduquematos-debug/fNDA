@@ -482,15 +482,16 @@ IOReturn GA104Device::bootGSP()
             IOLog("GA104: SEC2: VRAM cmdq readPtr reset to 0\n");
         }
 
-         if (!(gspCpuctl & 0x10)) {
+         if (!(gspCpuctl & 0x10) || riscvActive) {
              // CASO A: GSP already running — firmware loaded by SEC2 in WPR2.
+             // Falcon may be HALTED but RISC-V can still be ACTIVE (firmware on RISC-V)
              IOLog("GA104: GSP running after SEC2! Proceeding to ALLOC_ROOT test.\n");
              fGSPBooted = true;
              writeReg32(FALCON_OS, 0x00010001);  // app version
              __sync_synchronize();
         } else {
-            // CASO C: GSP halted after SEC2 — per NVIDIA, this is an error
-            IOLog("GA104: GSP halted after SEC2, aborting boot\n");
+            // CASO C: GSP halted and RISC-V not active after SEC2 — error
+            IOLog("GA104: GSP halted and RISC-V inactive after SEC2, aborting boot\n");
             return kIOReturnError;
         }
 
