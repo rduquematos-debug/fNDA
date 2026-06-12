@@ -10,11 +10,26 @@ static const char *kGA104PixelFormat = "--------RRRRRRRRGGGGGGGGBBBBBBBB";
 
 #define ENCODE_MODE_ID(w, h) ((IODisplayModeID)(0x80000000 | ((w) << 16) | (h)))
 
+static uint16_t decodeWidth(IODisplayModeID id) {
+    return (id >> 16) & 0x7FFF;
+}
+static uint16_t decodeHeight(IODisplayModeID id) {
+    return id & 0xFFFF;
+}
+static IODisplayModeID encodeMode(const EDIDMode &m) {
+    return ENCODE_MODE_ID(m.width, m.height);
+}
+static int findModeByID(const EDIDMode *modes, uint32_t count, IODisplayModeID id) {
+    uint16_t w = decodeWidth(id), h = decodeHeight(id);
+    for (uint32_t i = 0; i < count; i++)
+        if (modes[i].width == w && modes[i].height == h) return (int)i;
+    return -1;
+}
+
 bool GA104Framebuffer::init(GA104Device *device, IOPhysicalAddress fbPhys,
                              IOByteCount fbSize, UInt32 width, UInt32 height)
 {
     if (!super::init()) return false;
-
     fDevice = device;
     fFBPhys = fbPhys;
     fFBSize = fbSize;
@@ -22,8 +37,55 @@ bool GA104Framebuffer::init(GA104Device *device, IOPhysicalAddress fbPhys,
     fHeight = height;
     fRefreshRate = (60 << 16);
     fCurrentDepth = 0;
+    fModeCount = 0;
+    bzero(fModes, sizeof(fModes));
     fCurrentModeID = ENCODE_MODE_ID(width, height);
+    return true;
+}
 
+bool GA104Framebuffer::start(IOService *provider)
+{
+    if (!super::start(provider)) return false;
+    IOLog("GA104FB: starting\n");
+
+    // Try to read EDID via GSP RPC (best-effort, may not be available yet)
+    if (fDevice) {
+        uint8_t *edid = fDevice->getEDID();
+        uint32_t edidSize = fDevice->getEDIDSize();
+
+        if (edid && edidSize >= 128 && fEDIDParser.parse(edid, edidSize)) {
+            IOLog("GA104FB: EDID parsed: %s (%u modes)\n",
+                  fEDIDParser.getMonitorName(), fEDIDParser.getModeCount());
+        } else {
+            IOLog("GA104FB: EDID not available, using fallback\n");
+        }
+
+        // Build mode list from EDID
+        uint32_t edidCount = fEDIDParser.getModeCount();
+        if (edidCount > 0) {
+            for (uint32_t i = 0; i < edidCount && fModeCount < EDID_MAX_MODES; i++) {
+                fModes[fModeCount++] = fEDIDParser.getMode(i);
+            }
+        }
+
+        // Always include the default framebuffer size
+        bool hasDefault = false;
+        for (uint32_t i = 0; i < fModeCount; i++)
+            if (fModes[i].width == fWidth && fModes[i].height == fHeight)
+                { hasDefault = true; break; }
+        if (!hasDefault) {
+            EDIDMode def; bzero(&def, sizeof(def));
+            def.width = fWidth; def.height = fHeight; def.refreshHz = 60;
+            def.preferred = true;
+            fModes[fModeCount++] = def;
+        }
+
+        fCurrentModeID = ENCODE_MODE_ID(fWidth, fHeight);
+        setProperty("GA104FB_Modes", (uint64_t)fModeCount, 32);
+        IOLog("GA104FB: %u display modes available\n", fModeCount);
+    }
+
+    registerService();
     return true;
 }
 
@@ -52,13 +114,18 @@ const char * GA104Framebuffer::getPixelFormats()
 
 IOItemCount GA104Framebuffer::getDisplayModeCount()
 {
-    return 1;
+    return fModeCount > 0 ? (IOItemCount)fModeCount : 1;
 }
 
 IOReturn GA104Framebuffer::getDisplayModes(IODisplayModeID *allDisplayModes)
 {
     if (!allDisplayModes) return kIOReturnBadArgument;
-    allDisplayModes[0] = fCurrentModeID;
+    if (fModeCount == 0) {
+        allDisplayModes[0] = fCurrentModeID;
+        return kIOReturnSuccess;
+    }
+    for (uint32_t i = 0; i < fModeCount; i++)
+        allDisplayModes[i] = encodeMode(fModes[i]);
     return kIOReturnSuccess;
 }
 
@@ -66,24 +133,38 @@ IOReturn GA104Framebuffer::getInformationForDisplayMode(
     IODisplayModeID displayMode, IODisplayModeInformation *info)
 {
     if (!info) return kIOReturnBadArgument;
-    if (displayMode != fCurrentModeID) return kIOReturnUnsupported;
+    int idx = findModeByID(fModes, fModeCount, displayMode);
+    if (idx < 0 && displayMode == fCurrentModeID) {
+        info->nominalWidth = fWidth;
+        info->nominalHeight = fHeight;
+        info->refreshRate = fRefreshRate;
+        info->maxDepthIndex = 1;
+        info->flags = kDisplayModeValidFlag | kDisplayModeSafeFlag | kDisplayModeDefaultFlag;
+        info->imageWidth = 0;
+        info->imageHeight = 0;
+        bzero(info->reserved, sizeof(info->reserved));
+        return kIOReturnSuccess;
+    }
+    if (idx < 0) return kIOReturnUnsupported;
 
-    info->nominalWidth = fWidth;
-    info->nominalHeight = fHeight;
-    info->refreshRate = fRefreshRate;
+    const EDIDMode &m = fModes[idx];
+    info->nominalWidth = m.width;
+    info->nominalHeight = m.height;
+    info->refreshRate = (uint32_t)m.refreshHz << 16;
     info->maxDepthIndex = 1;
-    info->flags = kDisplayModeValidFlag | kDisplayModeSafeFlag | kDisplayModeDefaultFlag;
+    info->flags = kDisplayModeValidFlag | kDisplayModeSafeFlag;
+    if (m.preferred) info->flags |= kDisplayModeDefaultFlag;
     info->imageWidth = 0;
     info->imageHeight = 0;
     bzero(info->reserved, sizeof(info->reserved));
-
     return kIOReturnSuccess;
 }
 
 UInt64 GA104Framebuffer::getPixelFormatsForDisplayMode(
     IODisplayModeID displayMode, IOIndex depth)
 {
-    if (displayMode != fCurrentModeID) return kIOPixelEncodingNotSupported;
+    int idx = findModeByID(fModes, fModeCount, displayMode);
+    if (idx < 0 && displayMode != fCurrentModeID) return kIOPixelEncodingNotSupported;
     return ((UInt64)kIOBitsPerColorComponent8 << 32) | kIOPixelEncodingRGB444;
 }
 
@@ -92,10 +173,13 @@ IOReturn GA104Framebuffer::getPixelInformation(
     IOPixelAperture aperture, IOPixelInformation *pixelInfo)
 {
     if (!pixelInfo) return kIOReturnBadArgument;
-    if (displayMode != fCurrentModeID) return kIOReturnUnsupported;
     if (aperture != kIOFBSystemAperture) return kIOReturnUnsupported;
 
-    pixelInfo->bytesPerRow = fWidth * 4;
+    int idx = findModeByID(fModes, fModeCount, displayMode);
+    uint16_t w = (idx >= 0) ? fModes[idx].width : fWidth;
+    uint16_t h = (idx >= 0) ? fModes[idx].height : fHeight;
+
+    pixelInfo->bytesPerRow = w * 4;
     pixelInfo->bytesPerPlane = 0;
     pixelInfo->bitsPerPixel = 32;
     pixelInfo->pixelType = kIORGBDirectPixels;
@@ -107,10 +191,9 @@ IOReturn GA104Framebuffer::getPixelInformation(
     pixelInfo->componentMasks[2] = 0x000000FF;
     strncpy(pixelInfo->pixelFormat, kGA104PixelFormat, sizeof(pixelInfo->pixelFormat));
     pixelInfo->flags = 0;
-    pixelInfo->activeWidth = fWidth;
-    pixelInfo->activeHeight = fHeight;
+    pixelInfo->activeWidth = w;
+    pixelInfo->activeHeight = h;
     bzero(pixelInfo->reserved, sizeof(pixelInfo->reserved));
-
     return kIOReturnSuccess;
 }
 
@@ -124,47 +207,37 @@ IOReturn GA104Framebuffer::getCurrentDisplayMode(IODisplayModeID *displayMode, I
 
 IOReturn GA104Framebuffer::setDisplayMode(IODisplayModeID displayMode, IOIndex depth)
 {
-    if (displayMode != fCurrentModeID) return kIOReturnUnsupported;
+    int idx = findModeByID(fModes, fModeCount, displayMode);
+    if (idx < 0 && displayMode != fCurrentModeID) return kIOReturnUnsupported;
 
-    IOLog("GA104FB: setDisplayMode mode=0x%x depth=%lu\n", (unsigned int)displayMode, (unsigned long)depth);
+    uint16_t w = (idx >= 0) ? fModes[idx].width : fWidth;
+    uint16_t h = (idx >= 0) ? fModes[idx].height : fHeight;
+    uint8_t  refresh = (idx >= 0) ? fModes[idx].refreshHz : 60;
+
+    IOLog("GA104FB: setDisplayMode %ux%u@%u depth=%lu\n", w, h, refresh, (unsigned long)depth);
 
     if (fDevice) {
-        uint32_t w = fWidth, h = fHeight, refresh = 60;
-        // Decode width/height from mode ID (format: 0x8000WWWWxxxxHHHH)
-        if (displayMode & 0x80000000) {
-            w = (displayMode >> 16) & 0x7FFF;
-            h = displayMode & 0xFFFF;
-        }
-        if (w == 0 || h == 0) { w = fWidth; h = fHeight; }
-
-        // Try to extract refresh rate from EDID (if available)
-        uint8_t *edid = fDevice->getEDID();
-        if (edid && edid[0] == 0x00 && fDevice->getEDIDSize() >= 128) {
-            // EDID detailed timing descriptors at offsets 0x36, 0x48, 0x5A, 0x6C
-            for (int dtd = 0x36; dtd < 0x7E; dtd += 18) {
-                uint16_t h_active = edid[dtd] | (edid[dtd+1] << 8);
-                uint16_t v_active = edid[dtd+5] | (edid[dtd+6] << 8);
-                if (h_active == w && v_active == h) {
-                    uint16_t v_total = (edid[dtd+9] & 0x0F) | (edid[dtd+9+1] << 4);
-                    if (v_total > 0) {
-                        uint32_t pixel_clock_x10k = edid[dtd+0] | (edid[dtd+1] << 8);
-                        refresh = (pixel_clock_x10k * 10000 + v_total * h_active / 2) / (v_total * h_active);
-                        if (refresh < 50) refresh = 60;
-                    }
-                    break;
-                }
+        // Try GSP RPC display pipeline first (preferred path)
+        IOReturn gspRet = fDevice->sendGspRpcHeadSetTimings(0, w, h, refresh);
+        if (gspRet == kIOReturnSuccess) {
+            fDevice->sendGspRpcFlip(0);
+        } else {
+            // Fallback: direct register programming
+            IOLog("GA104FB: GSP modeset failed (0x%x), using legacy path\n", gspRet);
+            IOReturn ret = fDevice->programHeadForMode(0, w, h, refresh);
+            if (ret != kIOReturnSuccess) {
+                IOLog("GA104FB: legacy modeset failed: 0x%x\n", ret);
+                return ret;
             }
         }
 
-        IOReturn ret = fDevice->programHeadForMode(0, w, h, refresh);
-        if (ret != kIOReturnSuccess) {
-            IOLog("GA104FB: programHeadForMode failed: 0x%x\n", ret);
-            return ret;
-        }
+        fWidth = w; fHeight = h;
+        fRefreshRate = (uint32_t)refresh << 16;
     }
 
     fCurrentDepth = depth;
-    IOLog("GA104FB: setDisplayMode OK (%ux%u)\n", fWidth, fHeight);
+    fCurrentModeID = displayMode;
+    IOLog("GA104FB: setDisplayMode OK (%ux%u)\n", w, h);
     return kIOReturnSuccess;
 }
 
@@ -178,6 +251,7 @@ IOReturn GA104Framebuffer::getAttributeForConnection(
 {
     if (connectIndex != 0) return kIOReturnNoDevice;
     if (!value) return kIOReturnBadArgument;
+    *value = 0;
 
     switch (attribute) {
         case kConnectionFlags:
@@ -187,6 +261,18 @@ IOReturn GA104Framebuffer::getAttributeForConnection(
             *value = 0;
             return kIOReturnSuccess;
         case kConnectionDisplayParameters:
+            *value = 0;
+            return kIOReturnSuccess;
+        case kConnectionCheckEnable:
+            *value = 1;
+            return kIOReturnSuccess;
+        case kConnectionEnable:
+            *value = 1;
+            return kIOReturnSuccess;
+        case kConnectionSupportsHLDDCSense:
+            *value = 0;
+            return kIOReturnSuccess;
+        case kConnectionSupportsAppleSense:
             *value = 0;
             return kIOReturnSuccess;
         default:

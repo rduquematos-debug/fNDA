@@ -2,6 +2,7 @@
 #define GA104Framebuffer_hpp
 
 #include <IOKit/graphics/IOFramebuffer.h>
+#include "EDIDParser.hpp"
 
 class GA104Device;
 
@@ -12,6 +13,7 @@ class GA104Framebuffer : public IOFramebuffer
 public:
     bool init(GA104Device *device, IOPhysicalAddress fbPhys, IOByteCount fbSize,
               UInt32 width, UInt32 height);
+    virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
     virtual void free() APPLE_KEXT_OVERRIDE;
 
     // IOFramebuffer pure virtuals
@@ -54,6 +56,9 @@ protected:
     UInt32            fRefreshRate;
     IOIndex           fCurrentDepth;
     IODisplayModeID   fCurrentModeID;
+    EDIDParser        fEDIDParser;
+    EDIDMode          fModes[EDID_MAX_MODES];
+    uint32_t          fModeCount;
 };
 
 #endif
