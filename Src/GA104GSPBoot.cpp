@@ -14,6 +14,8 @@
 #include "SEC2Embed_Image.h"
 #include "SEC2Embed_HsBlSig.h"
 #include "SEC2Embed_Sig.h"
+#include "gsp/gsp_obj.h"
+#include "gsp/gsp_main.h"
 
 IOReturn GA104Device::setupRadix3()
 {
@@ -431,6 +433,24 @@ IOReturn GA104Device::bootGSP()
 
     ret = gspSetupQueues();
     if (ret != kIOReturnSuccess) return ret;
+
+    // === Initialize NVIDIA OBJGPU + HAL objects ===
+    if (!fGpuObj) {
+        fGpuObj = (OBJGPU*)IOMallocAligned(sizeof(OBJGPU), 64);
+        if (fGpuObj) {
+            bzero(fGpuObj, sizeof(OBJGPU));
+            NV_STATUS ns = gsp_obj_init(fGpuObj, this);
+            if (ns != NV_OK) {
+                IOFreeAligned(fGpuObj, sizeof(OBJGPU));
+                fGpuObj = nullptr;
+                IOLog("GA104: gsp_obj_init failed: 0x%x\n", (unsigned)ns);
+            } else {
+                IOLog("GA104: gsp_obj_init OK\n");
+                kgspConfigureFalcon_GA102(fGpuObj, fGpuObj->pKernelGsp);
+                IOLog("GA104: kgspConfigureFalcon_GA102 OK\n");
+            }
+        }
+    }
 
     // === Check for Direct Booter Boot first (skips SEC2) ===
     GspBootInfo booterInfo = {};

@@ -5,6 +5,7 @@
 #include "GA104Framebuffer.hpp"
 #include "GA104UserClient.hpp"
 #include "GSPFirmwareParser.hpp"
+#include "gsp/gsp_obj.h"
 #include <libkern/libkern.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/pci/IOPCIDevice.h>
@@ -24,6 +25,7 @@ bool GA104Device::init(OSDictionary *dict)
     fGSPFirmware = nullptr;
     fGSPQueue = nullptr;
     fGSPProtocol = nullptr;
+    fGpuObj = nullptr;
     fFBProvider = nullptr;
     fVBIOSDisplay = nullptr;
     fBAR0Map = nullptr;
@@ -80,6 +82,7 @@ void GA104Device::free()
     OSSafeReleaseNULL(fGSPQueue);
     OSSafeReleaseNULL(fGSPProtocol);
     OSSafeReleaseNULL(fVBIOSDisplay);
+    if (fGpuObj) { gsp_obj_destroy(fGpuObj); IOFreeAligned(fGpuObj, sizeof(OBJGPU)); fGpuObj = nullptr; }
     if (fBAR0Map) { fBAR0Map->release(); fBAR0Map = nullptr; }
     if (fBAR1Map) { fBAR1Map->release(); fBAR1Map = nullptr; }
     if (fBAR2Map) { fBAR2Map->release(); fBAR2Map = nullptr; }

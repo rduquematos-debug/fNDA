@@ -5,6 +5,7 @@
 #include <IOKit/IOUserClient.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include "os_compat.h"
 #include "GA104Regs.h"
 #include "GSPFirmware.hpp"
 #include "GSPQueue.hpp"
@@ -95,6 +96,7 @@ private:
     GSPQueue      *fGSPQueue;
     GSPProtocol   *fGSPProtocol;
     VBIOSDisplay  *fVBIOSDisplay;
+    OBJGPU        *fGpuObj;
 
     IOMemoryMap   *fBAR0Map;
     IOMemoryMap   *fBAR1Map;

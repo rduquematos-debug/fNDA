@@ -36,14 +36,19 @@ struct ConfidentialCompute;
 // 1. NVIDIA TYPE SYSTEM
 // ============================================================================
 
+#ifndef NvU32
 typedef uint32_t NvU32;
 typedef uint64_t NvU64;
 typedef uint16_t NvU16;
 typedef uint8_t  NvU8;
 typedef int32_t  NvS32;
 typedef int64_t  NvS64;
+#endif
 typedef NvU32    NV_STATUS;
+#ifndef NV_NVBOOL_DEFINED
+#define NV_NVBOOL_DEFINED
 typedef bool     NvBool;
+#endif
 // NvHandle is defined in GA104Regs.h as uint32_t — use that definition
 typedef uint64_t RmPhysAddr;
 typedef NvU64    NvLength;
@@ -133,15 +138,38 @@ typedef NvUPtr NvP64;
     (((OBJGPU*)(void*)(pGpu))->device->writeAbsReg32(addr, val))
 
 // NVIDIA register base address extraction (from published/ headers)
-// NV_PGSP range: 0x00110000:0x00113FFF
+// NV_PGSP (GSP Falcon engine base address)
+#define NV_PGSP                             0x00110000
 #define NV_PGSP_LOW_FIELD                   0x00110000
 #define NV_PGSP_HIGH_FIELD                  0x00113FFF
 
 // DRF_BASE: extract base from a register range definition
 #define DRF_BASE(drf)                       (drf##_LOW_FIELD)
+#define DRF_SHIFT(drf, field)               (drf##_##field##_SHIFT)
+#define DRF_MASK(drf, field)                (drf##_##field##_MASK)
+#define DRF_DEF(drf, field, val)            (((val) << DRF_SHIFT(drf, field)) & DRF_MASK(drf, field))
+#define FLD_SET_DRF_NUM(drf, field, val)    DRF_DEF(drf, field, val)
+#define DRF_NUM(drf, field, val)            DRF_DEF(drf, field, val)
 
 // Register field helper macros (NVIDIA DRF = Device Register Field)
-// Simplified versions — not used by existing fNDA code, only by future NVIDIA .c ports
+
+// Falcon v4 register ADDRESSES (offsets from Falcon regBase)
+#define NV_PFALCON_FALCON_DMATRFBASE                    0x00000110
+#define NV_PFALCON_FALCON_DMATRFBASE1                   0x00000128
+#define NV_PFALCON_FALCON_DMATRFMOFFS                   0x00000114
+#define NV_PFALCON_FALCON_DMATRFFBOFFS                  0x0000011c
+#define NV_PFALCON_FALCON_DMATRFCMD                     0x00000118
+#define NV_PFALCON_FALCON_BOOTVEC                       0x00000104
+#define NV_FALCON2_GSP_BASE                             0x00111000
+
+// DMA poll mode
+#define FLCN_DMA_POLL_QUEUE_NOT_FULL    0
+typedef enum {
+    FLCN_DMA_POLL_MODE_IDLE = 0,
+    FLCN_DMA_POLL_MODE_FULL = 1
+} FlcnDmaPollMode;
+
+#define DBG_BREAKPOINT()                do { } while(0)
 
 // Falcon v4 register field definitions (from dev_falcon_v4.h)
 // Required by kernel_gsp_falcon_ga102.c for DMA + BROM operations.

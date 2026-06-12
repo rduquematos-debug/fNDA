@@ -13,4 +13,9 @@ NV_STATUS gsp_boot(OBJGPU *pGpu);
 // Shutdown GSP subsystem.
 void gsp_shutdown(OBJGPU *pGpu);
 
+// GA102-specific GSP HAL functions (from nvidia/kernel_gsp_ga102.c)
+void kgspConfigureFalcon_GA102(OBJGPU *pGpu, KernelGsp *pKernelGsp);
+void kgspGetGspRmBootUcodeStorage_GA102(OBJGPU *pGpu, KernelGsp *pKernelGsp,
+                                         void **ppBinStorageImage, void **ppBinStorageDesc);
+
 #endif

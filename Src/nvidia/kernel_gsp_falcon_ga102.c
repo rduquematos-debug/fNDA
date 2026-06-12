@@ -27,13 +27,14 @@
  */
 
 #include "../os_compat.h"
+#include "../GA104Device.hpp"
 
 // Original NVIDIA includes replaced by os_compat.h:
 //   gpu/gsp/kernel_gsp.h, gpu/gpu.h, kernel_falcon.h, rmgspseq.h,
 //   published/ampere/ga102/dev_falcon_v4.h, dev_falcon_second_pri.h,
 //   dev_fbif_v4.h, dev_gc6_island.h, dev_gc6_island_addendum.h, kernel_sec2.h
 
-static GpuWaitConditionFunc s_dmaPollCondFunc;
+static GpuWaitConditionFunc s_dmaPollCondFuncPtr;
 
 typedef struct {
     KernelFalcon *pKernelFlcn;
@@ -83,7 +84,7 @@ s_dmaPoll_GA102
         data.pollValue = DRF_DEF(_PFALCON, _FALCON_DMATRFCMD, _IDLE, _TRUE);
     }
 
-    status = gpuTimeoutCondWait(pGpu, s_dmaPollCondFunc, &data, NULL);
+    status = gpuTimeoutCondWait(pGpu, s_dmaPollCondFuncPtr, &data, NULL);
     if (status != NV_OK)
     {
         NV_PRINTF(LEVEL_ERROR, "Error while waiting for Falcon DMA; mode: %d, status: 0x%08x\n", mode, status);

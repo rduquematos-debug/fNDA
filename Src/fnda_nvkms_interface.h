@@ -7,7 +7,9 @@
 #include <stdarg.h>
 #include <kern/clock.h>
 
-// -- NVIDIA type system (minimal) --
+// -- NVIDIA type system (minimal) —
+// Guarded: os_compat.h provides the same types via GA104Device.hpp
+#ifndef NvU32
 typedef uint8_t  NvU8;
 typedef uint16_t NvU16;
 typedef uint32_t NvU32;
@@ -16,9 +18,15 @@ typedef int8_t   NvS8;
 typedef int16_t  NvS16;
 typedef int32_t  NvS32;
 typedef int64_t  NvS64;
+#endif
+#ifndef NV_NVBOOL_DEFINED
+#define NV_NVBOOL_DEFINED
 typedef int      NvBool;
+#endif
+#ifndef NV_TRUE
 #define NV_TRUE   1
 #define NV_FALSE  0
+#endif
 
 // -- Forward decls for NVKMS types --
 typedef struct nvkms_per_open    nvkms_per_open_handle_t;
