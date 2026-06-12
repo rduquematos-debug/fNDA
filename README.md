@@ -12,22 +12,33 @@ to the macOS IOKit framework.
 
 ## Port Progress
 
-| Area | % | Bar |
-|------|---|-----|
-| Core Driver (GSP-RM, PCI, BARs) | 83% | `████████░░` |
-| GSP Boot (SEC2 + Falcon) | 85% | `████████░░` |
-| GSP RPC (message queues, alloc/control) | 85% | `████████░░` |
-| Legacy Display (VPLL, heads, SOR) | 85% | `████████░░` |
-| Framebuffer / IOFramebuffer | 65% | `██████░░░░` |
-| NVKMS OS Interface | 65% | `██████░░░░` |
-| Userspace (UserClient + gsp_loader) | 100% | `██████████` |
-| Firmware Parsing (ELF, NVFW) | 80% | `████████░░` |
-| VBIOS Parsing (DCB/CONN) | 75% | `███████░░░` |
-| NVIDIA Ported Code (byte-for-byte) | 80% | `████████░░` |
-| os_compat.h (Linux→macOS compat layer) | 85% | `████████░░` |
-| **Overall** | **78%** | **`████████░░`** |
+> Percentages reflect what the Makefile actually compiles and what works at runtime.
+> Code in `Src/nvidia/` and `Src/gsp/` exists but is **not yet compiled** — excluded from this table.
 
-~18,100 lines of kext code + ~3,800 lines of byte-for-byte NVIDIA ported code + 991 lines of compat layer.
+| Area | % | Bar | Notes |
+|------|---|-----|-------|
+| Core Device (init, BARs, PCI) | 80% | `████████░░` | Lifecycle works, not bare metal tested |
+| GSP Boot (SEC2 + Falcon) | 60% | `██████░░░░` | SEC2 boots, but GSP_INIT_DONE **never arrives** |
+| GSP RPC (queues, alloc/control) | 50% | `█████░░░░░` | Code complete, **never tested end-to-end** (GSP stalls) |
+| Legacy Display (VPLL, heads, SOR) | 85% | `████████░░` | Most complete subsystem |
+| Framebuffer / IOFramebuffer | 35% | `███░░░░░░░` | Registers in IOReg, **no display output** |
+| NVKMS OS Interface | 30% | `███░░░░░░░` | RM bridge exists, **entry points are stubs** |
+| Userspace (24 methods + gsp_loader) | 90% | `█████████░` | Complete, but boot failure limits usefulness |
+| Firmware Parsing (ELF, NVFW) | 90% | `█████████░` | All parsers work, only verifySig is stub |
+| VBIOS Parsing (DCB/CONN) | 60% | `██████░░░░` | Parsers work, configureEncoder is stub |
+| os_compat.h (Linux→macOS layer) | 85% | `████████░░` | 991 lines, very comprehensive |
+| **Overall (compiled code)** | **~60%** | **`██████░░░░`** | **See note below** |
+
+> **Reality check:** ~60% of the compiled code is written and functional. The remaining 40% is stubs, broken paths (GSP_INIT_DONE), or untested code. The **critical path to display output** (GSP handshake + DP link training) is still 0%.
+
+### Compiled vs Uncompiled
+
+| Category | Lines | Status |
+|----------|-------|--------|
+| Compiled by Makefile (15 source files) | ~6,200 | ✅ Actual kext binary |
+| Embedded blobs (VBIOS, SEC2 firmware) | ~17,900 | ✅ Compiled via `#include` |
+| `Src/nvidia/*.c` (NVIDIA byte-for-byte ports) | ~1,315 | ❌ **Not in Makefile** |
+| `Src/gsp/*.c` (GSP abstraction layer) | ~150 | ❌ **Not in Makefile** |
 
 ---
 
@@ -95,12 +106,12 @@ fNDA/
 │   ├── nvkms-rmapi.c       # RM API adapter (283 lines)
 │   ├── os_compat.h         # Linux→macOS compat layer (991 lines)
 │   └── Makefile
-├── Src/nvidia/             # Byte-for-byte NVIDIA ports
-│   ├── kernel_gsp_ga102.c
-│   ├── kernel_gsp_falcon_ga102.c
-│   ├── message_queue_cpu.c
+├── Src/nvidia/             # Byte-for-byte NVIDIA ports (⚠️ not compiled)
+│   ├── kernel_gsp_ga102.c (95L)
+│   ├── kernel_gsp_falcon_ga102.c (396L)
+│   ├── message_queue_cpu.c (824L)
 │   └── inc/                # Register headers
-├── Src/gsp/                # GSP abstraction layer (not yet compiled)
+├── Src/gsp/                # GSP abstraction layer (⚠️ not compiled)
 ├── tools/                  # gsp_loader — userspace firmware loader
 ├── Resources/              # GSP firmware, VBIOS dumps
 ├── Info.plist              # Kext bundle metadata
