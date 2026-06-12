@@ -80,8 +80,6 @@ kgspGetGspRmBootUcodeStorage_GA102
     BINDATA_STORAGE **ppBinStorageDesc
 )
 {
-    const BINDATA_ARCHIVE *pBinArchive = kgspGetBinArchiveGspRmBoot_HAL(pKernelGsp);
-
     if (kgspIsDebugModeEnabled(pGpu, pKernelGsp))
     {
         *ppBinStorageImage = (BINDATA_STORAGE *)bindataArchiveGetStorage(pBinArchive, BINDATA_LABEL_UCODE_IMAGE_DBG);

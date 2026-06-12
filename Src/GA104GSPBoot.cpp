@@ -831,9 +831,6 @@ IOReturn GA104Device::calculateVramLayout()
     uint64_t wpr2Addr = heapAddr;
     uint64_t wpr2Size = (frtsAddr + frtsSize) - heapAddr;
 
-    // Non-WPR heap (1MB below WPR2, only if space permits)
-    uint64_t nwprHeapSize = 0;
-
     // If VRAM is very small, pack things tightly
     if (heapAddr < 0x100000) {
         IOLog("GA104: VRAM too small for standard layout, packing tightly\n");

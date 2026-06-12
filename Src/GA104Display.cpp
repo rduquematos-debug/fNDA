@@ -93,10 +93,10 @@ IOReturn GA104Device::flipToTriangle()
     md->prepare();
 
     // Rasterizar triângulo com gradiente RGB barycentric
-    // Vértices: A(960,100) vermelho, B(100,900) verde, C(1820,900) azul
-    float ax = 960, ay = 100; uint32_t cr = 0xFF0000FF; // ABGR: R=255
-    float bx = 100, by = 900; uint32_t cg = 0xFF00FF00; // G=255
-    float cx = 1820, cy = 900; uint32_t cb = 0xFFFF0000; // B=255
+    // Vertices: A(960,100) red, B(100,900) green, C(1820,900) blue
+    float ax = 960, ay = 100;
+    float bx = 100, by = 900;
+    float cx = 1820, cy = 900;
 
     float denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
 
@@ -439,21 +439,23 @@ IOReturn GA104Device::programHeadForMode(uint32_t head, uint32_t width, uint32_t
         return kIOReturnNotReady;
     }
 
-    // Timings for 1920x1080@60Hz (CVT-RB standard)
+    // CVT-RB v1 timings for arbitrary resolution
+    // VESA CVT Reduced Blanking: fixed 48-pixel horizontal blanking
     uint32_t hVisible = width, vVisible = height;
-    uint32_t hTotal = 2200, hSyncStart = 2008, hSyncEnd = 2052;
-    uint32_t hBlankStart = hVisible, hBlankEnd = hTotal;
-    uint32_t vTotal = 1125, vSyncStart = 1084, vSyncEnd = 1088;
-    uint32_t vBlankStart = vVisible, vBlankEnd = vTotal;
-    uint32_t pixelClockKHz = 148500; // 148.5 MHz
-
-    // Override for non-1080p modes (simplified: use 1080p timings for now)
-    // TODO: proper CVT-RB timing calculation for arbitrary modes
+    uint32_t hSyncWidth = 32, hFrontPorch = 8, hBackPorch = 8;
+    uint32_t hSyncStart = hVisible + hFrontPorch;
+    uint32_t hSyncEnd = hSyncStart + hSyncWidth;
+    uint32_t hTotal = hSyncEnd + hBackPorch;
+    uint32_t vSyncWidth = 6, vFrontPorch = 3, vBackPorch = 5;
+    uint32_t vSyncStart = vVisible + vFrontPorch;
+    uint32_t vSyncEnd = vSyncStart + vSyncWidth;
+    uint32_t vTotal = vSyncEnd + vBackPorch;
+    uint32_t pixelClockKHz = (uint32_t)((uint64_t)hTotal * vTotal * 60 / 1000);
 
     uint32_t hTiming = (vTotal << 16) | hTotal;
     uint32_t vSync = (vSyncEnd << 16) | hSyncEnd;
-    uint32_t hBlank = (vBlankStart << 16) | hBlankStart;
-    uint32_t vBlank = (vBlankEnd << 16) | hBlankEnd;
+    uint32_t hBlank = (hTotal << 16) | hVisible;
+    uint32_t vBlank = (vTotal << 16) | vVisible;
 
     writeReg32(NV_PHEAD_SET_HEAD_TIMING(head), hTiming);
     writeReg32(NV_PHEAD_SET_HEAD_VSYNC(head), vSync);

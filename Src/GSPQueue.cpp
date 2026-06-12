@@ -1,4 +1,5 @@
 #include "GSPQueue.hpp"
+#include "os_compat.h"
 #include <libkern/libkern.h>
 #include <IOKit/IOLib.h>
 #include <kern/debug.h>
@@ -24,6 +25,69 @@ bool GSPQueue::init()
     fTxLinked = false;
     fRxLinked = false;
     return true;
+}
+
+// Forward declarations for msgq extern "C" functions (NVIDIA msgq API)
+// Implemented via GSPQueue when available, stubbed if not.
+static GSPQueue *sMsgqQueues[4] = {};
+static int sMsgqCount = 0;
+
+extern "C" int msgqInit(RM_MSGQ_HANDLE *hQueue, void *pMetaData)
+{
+    GSPQueue *q = OSTypeAlloc(GSPQueue);
+    if (!q || !q->init()) return -1;
+    int id = sMsgqCount++;
+    sMsgqQueues[id] = q;
+    *hQueue = id;
+    return 0;
+}
+
+extern "C" int msgqTxCreate(RM_MSGQ_HANDLE hQueue, void *buf, NvU32 size,
+                             NvU32 elMin, NvU32 hdrAlign, NvU32 elAlign, NvU32 flags)
+{
+    if (hQueue < 0 || hQueue >= sMsgqCount) return -1;
+    return sMsgqQueues[hQueue]->txCreate(buf, size, elMin, hdrAlign, elAlign, flags) ? 0 : -1;
+}
+
+extern "C" int msgqTxGetWriteBuffer(RM_MSGQ_HANDLE hQueue, NvU32 index, void **ppBuf)
+{
+    if (hQueue < 0 || hQueue >= sMsgqCount) return -1;
+    uint8_t *buf = sMsgqQueues[hQueue]->getWriteBuffer(index);
+    if (!buf) return -1;
+    *ppBuf = buf;
+    return 0;
+}
+
+extern "C" int msgqTxSubmitBuffers(RM_MSGQ_HANDLE hQueue, NvU32 nElements)
+{
+    if (hQueue < 0 || hQueue >= sMsgqCount) return -1;
+    sMsgqQueues[hQueue]->submitBuffers(nElements);
+    return 0;
+}
+
+extern "C" int msgqRxLink(RM_MSGQ_HANDLE hQueue, const void *buf, NvU32 size, NvU32 elMin)
+{
+    if (hQueue < 0 || hQueue >= sMsgqCount) return -1;
+    return sMsgqQueues[hQueue]->rxLink(buf, size, elMin) ? 0 : -1;
+}
+
+extern "C" int msgqRxGetReadBuffer(RM_MSGQ_HANDLE hQueue, NvU32 index, const void **ppBuf)
+{
+    if (hQueue < 0 || hQueue >= sMsgqCount) return -1;
+    *ppBuf = sMsgqQueues[hQueue]->getReadBuffer(index);
+    return *ppBuf ? 0 : -1;
+}
+
+extern "C" int msgqRxMarkConsumed(RM_MSGQ_HANDLE hQueue, NvU32 nElements)
+{
+    if (hQueue < 0 || hQueue >= sMsgqCount) return -1;
+    sMsgqQueues[hQueue]->markConsumed(nElements);
+    return 0;
+}
+
+extern "C" int msgqGetMetaSize(void)
+{
+    return sizeof(GspMsgqTxHeader) + sizeof(GspMsgqRxHeader) + 64;
 }
 
 void GSPQueue::free()

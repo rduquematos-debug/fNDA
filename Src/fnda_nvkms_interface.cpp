@@ -205,10 +205,11 @@ void nvkms_unregister_backlight(struct nvkms_backlight_device *nvkms_bd) {}
 // Minimal RM ops structures (matching nvidia_kernel_rmapi_ops_t layout)
 #define NV04_ALLOC              0x00008004
 #define NV04_CONTROL            0x0000800E
+// RM API Ioctl numbers (NV04_MAP_MEMORY renamed to avoid conflict with GA104Regs.h)
 #define NV01_FREE               0x00000001
 #define NV01_ALLOC_MEMORY       0x00000002
 #define NV04_VID_HEAP_CONTROL   0x0000801B
-#define NV04_MAP_MEMORY         0x00008010
+#define RMAPI_MAP_MEMORY        0x00008010
 #define NV04_UNMAP_MEMORY       0x00008011
 #define NV04_MAP_MEMORY_DMA     0x00008012
 #define NV04_UNMAP_MEMORY_DMA   0x00008017

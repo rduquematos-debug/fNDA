@@ -294,11 +294,11 @@ IOReturn GA104Framebuffer::getAttributeForConnection(
             *value = 1;
             return kIOReturnSuccess;
         case kConnectionSupportsHLDDCSense:
-            *value = 0;
-            return kIOReturnSuccess;
+            return kIOReturnUnsupported;
+        case kConnectionSupportsLLDDCSense:
+            return kIOReturnUnsupported;
         case kConnectionSupportsAppleSense:
-            *value = 0;
-            return kIOReturnSuccess;
+            return kIOReturnUnsupported;
         default:
             return kIOReturnUnsupported;
     }

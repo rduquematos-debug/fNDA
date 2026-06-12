@@ -22,7 +22,6 @@ IOReturn GA104Device::sendGspRpcAllocRoot()
     for (uint32_t ri = 0; ri < wPtr; ri++) {
         uint32_t eIdx = ri % GSP_QUEUE_MSG_COUNT;
         uint8_t *mEntry = fMsgqEntryBase + eIdx * GSP_QUEUE_MSG_SIZE;
-        GspMsgQueuePrefix *mPre = (GspMsgQueuePrefix*)mEntry;
         GspRpcMessageHeader *mRpc = (GspRpcMessageHeader*)(mEntry + sizeof(GspMsgQueuePrefix));
         if (mRpc->function == NV_VGPU_MSG_FUNCTION_GSP_RM_ALLOC) {
             IOLog("GA104: ALLOC_ROOT response found in msgq: rpcResult=0x%x\n", mRpc->rpcResult);
@@ -325,10 +324,6 @@ static void nvgMsgqCalcOffsets(uint32_t hdrAlign, uint32_t entryAlign,
                                 uint32_t *rxHdrOff, uint32_t *entryOff);
 static void nvgMsgqTxCreate(GspMsgqTxHeader *pTxHdr, uint32_t size, uint32_t msgSize,
                              uint32_t hdrAlign, uint32_t entryAlign, uint32_t flags);
-static int nvgMsgqRxLink(const GspMsgqTxHeader *pRemoteTxHdr, uint32_t size, uint32_t msgSize);
-static uint32_t nvgMsgqRxAvailable(uint32_t rxReadPtr, uint32_t remoteWritePtr, uint32_t msgCount);
-static void nvgMsgqTxSubmit(GspMsgqTxHeader *pTxHdr, uint32_t n);
-
 IOReturn GA104Device::gspSetupQueues()
 {
     IOLog("GA104: gspSetupQueues starting\n");
@@ -550,9 +545,11 @@ IOReturn GA104Device::gspSetupQueues()
     if (!fRmargsBuf) {
         fRmargsBuf = IOMallocAligned(GSP_QUEUE_PAGE_SIZE, GSP_QUEUE_PAGE_SIZE);
         if (!fRmargsBuf) return kIOReturnNoMemory;
-        IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(
-            (mach_vm_address_t)fRmargsBuf, GSP_QUEUE_PAGE_SIZE, kIODirectionInOut, kernel_task);
-        if (md) { md->prepare(); fRmargsPhys = md->getPhysicalSegment(0, nullptr); md->complete(); md->release(); }
+        {
+            IOMemoryDescriptor *rmd = IOMemoryDescriptor::withAddressRange(
+                (mach_vm_address_t)fRmargsBuf, GSP_QUEUE_PAGE_SIZE, kIODirectionInOut, kernel_task);
+            if (rmd) { rmd->prepare(); fRmargsPhys = rmd->getPhysicalSegment(0, nullptr); rmd->complete(); rmd->release(); }
+        }
         if (!fRmargsPhys) { IOFreeAligned(fRmargsBuf, GSP_QUEUE_PAGE_SIZE); fRmargsBuf = nullptr; return kIOReturnNoMemory; }
     }
     memset(fRmargsBuf, 0, GSP_QUEUE_PAGE_SIZE);
@@ -650,19 +647,19 @@ IOReturn GA104Device::gspSetupQueues()
 
         // Copy log buffers to WPR2 (optional, firmware log mechanism)
         if (fLogInitBuf) {
-            IOMemoryDescriptor *md = IOMemoryDescriptor::withPhysicalAddress(
+            auto ld = IOMemoryDescriptor::withPhysicalAddress(
                 fBar1Phys + wpr2LogInit, logBufSize, kIODirectionOut);
-            if (md) { md->prepare(); md->writeBytes(0, fLogInitBuf, logBufSize); md->complete(); md->release(); }
+            if (ld) { ld->prepare(); ld->writeBytes(0, fLogInitBuf, logBufSize); ld->complete(); ld->release(); }
         }
         if (fLogIntrBuf) {
-            IOMemoryDescriptor *md = IOMemoryDescriptor::withPhysicalAddress(
+            auto ld = IOMemoryDescriptor::withPhysicalAddress(
                 fBar1Phys + wpr2LogIntr, logBufSize, kIODirectionOut);
-            if (md) { md->prepare(); md->writeBytes(0, fLogIntrBuf, logBufSize); md->complete(); md->release(); }
+            if (ld) { ld->prepare(); ld->writeBytes(0, fLogIntrBuf, logBufSize); ld->complete(); ld->release(); }
         }
         if (fLogRmBuf) {
-            IOMemoryDescriptor *md = IOMemoryDescriptor::withPhysicalAddress(
+            auto ld = IOMemoryDescriptor::withPhysicalAddress(
                 fBar1Phys + wpr2LogRm, logBufSize, kIODirectionOut);
-            if (md) { md->prepare(); md->writeBytes(0, fLogRmBuf, logBufSize); md->complete(); md->release(); }
+            if (ld) { ld->prepare(); ld->writeBytes(0, fLogRmBuf, logBufSize); ld->complete(); ld->release(); }
         }
 
         // Update LibOS pa to WPR2 offsets and copy
@@ -708,32 +705,19 @@ static void nvgMsgqTxCreate(GspMsgqTxHeader *pTxHdr, uint32_t size, uint32_t msg
     pTxHdr->entryOff = entryOff;
     __sync_synchronize();
 }
+__attribute__((unused))
 static int nvgMsgqRxLink(const GspMsgqTxHeader *pRemoteTxHdr, uint32_t size, uint32_t msgSize)
 {
-    GspMsgqTxHeader rx;
-    memcpy(&rx, (const void*)pRemoteTxHdr, sizeof(rx));
-    __sync_synchronize();
-
-    // Validate — matching NVIDIA msgqRxLink checks
-    if (rx.version != NVG_MSGQ_VERSION) return -9;
-    if (rx.size != size) return -7;
-    if (rx.msgSize != msgSize) return -8;
-    if (rx.msgSize < NVG_MSGQ_MSG_SIZE_MIN) return -2;
-    if (msgSize > size) return -3;
-    if (rx.rxHdrOff < sizeof(GspMsgqTxHeader)) return -10;
-    if (rx.entryOff < rx.rxHdrOff + sizeof(GspMsgqRxHeader)) return -10;
-
-    uint32_t expectedCount = (size - rx.entryOff) / msgSize;
-    if (rx.msgCount != expectedCount) return -10;
-
-    // Write readPtr=0 (signal RX ready) — at their readPtr location (swapped)
-    // In swapped mode, our readPtr is at our rxHdr location
-    // But we're just linking — firmware needs to know we're ready
-    // The simplest signal: the firmware checks if rxReadPtr has been written
-    // For now, just validate the header exists
-    
-    return 0; // Linked successfully
+    uint32_t rxHdrOff, entryOff;
+    nvgMsgqCalcOffsets(2, 12, &rxHdrOff, &entryOff);
+    if (pRemoteTxHdr == NULL) return -1;
+    if (pRemoteTxHdr->version != 0) return -1;
+    if (pRemoteTxHdr->msgSize < size) return -1;
+    if (pRemoteTxHdr->msgCount < 1) return -1;
+    *(volatile uint32_t*)((volatile uint8_t*)pRemoteTxHdr + rxHdrOff) = 0;
+    return 0;
 }
+__attribute__((unused))
 static uint32_t nvgMsgqRxAvailable(uint32_t rxReadPtr, uint32_t remoteWritePtr, uint32_t msgCount)
 {
     if (remoteWritePtr >= msgCount) return 0;
@@ -741,6 +725,7 @@ static uint32_t nvgMsgqRxAvailable(uint32_t rxReadPtr, uint32_t remoteWritePtr, 
     if (avail >= msgCount) avail -= msgCount;
     return avail;
 }
+__attribute__((unused))
 static void nvgMsgqTxSubmit(GspMsgqTxHeader *pTxHdr, uint32_t n)
 {
     uint32_t wp = pTxHdr->writePtr + n;
@@ -779,9 +764,8 @@ IOReturn GA104Device::sendGspRpc(GspRpcMessageHeader *msg, void *payload,
     fCmdqTx->writePtr = wp + 1;
     __sync_synchronize();
 
-    // Doorbell: usar aliased offset (não writeAbsReg32 — fora do BAR0!)
-    uint32_t wpDoor = fCmdqTx ? fCmdqTx->writePtr : 0;
-    writeReg32(GSP_DOORBELL_REL, 0);  // aliased 0x0C00 -> QUEUE_HEAD(0)
+    // Doorbell: pulse via aliased offset (QUEUE_HEAD)
+    writeReg32(GSP_DOORBELL_REL, 0);
     __sync_synchronize();
     setProperty("GA104_DoorbellMailbox", (uint32_t)fCmdqTx->writePtr, 32);
 
@@ -831,7 +815,7 @@ IOReturn GA104Device::sendGspRpc(GspRpcMessageHeader *msg, void *payload,
             for (int di = 0; di < 20; di++) {
                 if (e32[di]) IOLog("  [0x%02x] 0x%08x\n", di*4, e32[di]);
             }
-            GspMsgQueuePrefix *pre = (GspMsgQueuePrefix*)((uint8_t*)fShmBuf + fMsgqOff + GSP_QUEUE_PAGE_SIZE);
+            GspMsgQueuePrefix *rpre = (GspMsgQueuePrefix*)((uint8_t*)fShmBuf + fMsgqOff + GSP_QUEUE_PAGE_SIZE);
             GspRpcMessageHeader *rpc = (GspRpcMessageHeader*)((uint8_t*)pre + sizeof(GspMsgQueuePrefix));
             IOLog("  decoded: seq=%u chk=0x%08x func=0x%04x result=0x%08x sig=0x%08x\n",
                   pre->seqNum, pre->checksum,
@@ -1390,6 +1374,7 @@ IOReturn GA104Device::gspStartBooter(void)
 
     // === Step 7: Poll for Booter completion ===
     uint32_t bcrStart = readReg32(FALCON_BCR_CTRL);
+    (void)bcrStart;
     bool booterDone = false;
     for (int i = 0; i < 5000; i++) {
         IOSleep(2);

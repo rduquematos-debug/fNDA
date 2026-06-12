@@ -28,12 +28,9 @@
 #include "GA104Regs.h"
 
 // Forward declarations (needed before OBJGPU/GA104Device are fully defined)
-struct GA104Device;
+class GA104Device;
 struct OBJGPU;
 struct ConfidentialCompute;
-
-// Forward declaration — our IOService subclass
-class GA104Device;
 
 // ============================================================================
 // 1. NVIDIA TYPE SYSTEM
@@ -61,6 +58,12 @@ typedef NvU64    NvLength;
 #define NV_ERR_BAD_PARAM            0x0000002C
 #define NV_ERR_OBJECT_TYPE_MISMATCH 0x0000002B
 #define NV_ERR_INSUFFICIENT_PERMISSIONS 0x0000005D
+#define NV_ERR_INVALID_STATE        0x00000018
+#define NV_ERR_INVALID_DATA         0x0000001C
+#define NV_ERR_BUSY_RETRY           0x00000052
+#define NV_WARN_NOTHING_TO_DO       0x00010000
+#define NV_ERR_RESET_REQUIRED       0x00000062
+#define NV_ERR_INSUFFICIENT_RESOURCES 0x0000005A
 
 #define NV_TRUE                     1
 #define NV_FALSE                    0
@@ -534,9 +537,9 @@ static inline NV_STATUS memdescGetPhysAddrs(const MEMORY_DESCRIPTOR *pDesc,
 // that wraps our GA104Device and provides access to the GSP/Falcon/SEC2
 // sub-objects.
 
-class KernelGsp;
-class KernelFalcon;
-class KernelSec2;
+struct KernelGsp;
+struct KernelFalcon;
+struct KernelSec2;
 
 typedef struct OBJGPU {
     GA104Device   *device;         // our IOKit IOService
@@ -982,7 +985,7 @@ gspMsgQueueGetRpcMessageHeader(const MESSAGE_QUEUE_INFO *pMQI,
 static inline NvU32 gspMsgQueueGetRpcMessageLength(const MESSAGE_QUEUE_INFO *pMQI,
                                                      const GSP_MSG_QUEUE_ELEMENT *pElement)
 {
-    return pMQI->queueElementHdrSize;
+    return (NvU32)pMQI->queueElementHdrSize;
 }
 
 static inline NvU32 gspMsgQueueBytesToElements(NvU32 bytes, NvU32 elMin)

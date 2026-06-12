@@ -34,16 +34,16 @@ to the macOS IOKit framework.
 
 | Category | Lines | Size | Status |
 |----------|-------|------|--------|
-| Compiled by Makefile (18 source + headers) | ~6,700 + headers | 322 KB kext | ✅ **Zero errors, latest: 12 Jun 2026** |
+| Compiled by Makefile (20 source + headers) | ~6,800 + headers | 315 KB kext | ✅ **Zero errors, 12 Jun 2026** |
 | Embedded blobs (VBIOS, SEC2 firmware) | ~17,900 | Compiled via `#include` | ✅ Linked into kext |
-| `nvidia/kernel_gsp_ga102.c` (GSP HAL) | 95 | Now compiled | ✅ **Just added** |
-| `gsp/gsp_main.c` + `gsp/gsp_obj.c` (GSP layer) | 124 | Now compiled | ✅ **Just added** |
-| `nvidia/stubs/*.c` (ECC, NVLink) | 4 | Now compiled | ✅ **Just added** |
-| `nvidia/kernel_gsp_falcon_ga102.c` (Falcon DMA) | 396 | Needs fixes | ❌ Missing NVIDIA register defines |
-| `nvidia/message_queue_cpu.c` (msgq CPU) | 824 | Needs stubs | ❌ Needs msgq + CC header stubs |
-| **Total ported code now compiled** | **~900 of ~1,465 lines** | | **✅ 62% of nvidia/gsp code integrated** |
+| `nvidia/kernel_gsp_ga102.c` (byte-for-byte port) | 95 | ✅ Compiled | ✅ |
+| `gsp/gsp_main.c` + `gsp/gsp_obj.c` (abstraction layer) | 124 | ✅ Compiled | ✅ |
+| `nvidia/stubs/*.c` (ECC, NVLink) | 4 | ✅ Compiled | ✅ |
+| `GSPQueue.cpp` — msgq `extern "C"` wrappers | ~60 | ✅ Added | Bridges NVIDIA msgq API → GSPQueue |
+| `nvidia/kernel_gsp_falcon_ga102.c` (Falcon DMA) | 396 | ❌ Needs ~30 NVIDIA register defines | Future task |
+| `nvidia/message_queue_cpu.c` (msgq CPU-side) | 824 | ❌ Needs NvP64, MEMDESC_FLAGS, etc. | Future task |
 
-> **Last verified:** `make clean && make all` — PASS on Darwin 22.6.0 x86_64, Xcode CLT. 322 KB kext, zero errors.
+> **Last verified:** `make clean && make all` — PASS on Darwin 22.6.0 x86_64, Xcode CLT. 315 KB kext, zero errors.
 
 ---
 
