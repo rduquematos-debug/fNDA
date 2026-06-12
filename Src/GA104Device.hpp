@@ -29,8 +29,8 @@ public:
                                     UInt32 type, OSDictionary *properties,
                                     IOUserClient **handler) override;
 
-    IOService *getProvider() const { return fProvider; }
-
+    IOService *getProvider() const APPLE_KEXT_OVERRIDE { return fProvider; }
+    
     uint32_t getDeviceID() const { return fDeviceID; }
     uint32_t getRevision() const { return fRevision; }
     uint64_t getBAR0Phys() const { return fBar0Phys; }
@@ -240,7 +240,7 @@ public:
     IOReturn readVRAM(uint64_t vramOff, void *data, uint32_t size);
     uint32_t readCoreGET(void);
     void writeCorePUT(uint32_t dwordOffset);
-    uint32_t getCorePbAddr(void) const { return fFB.corePbAddr; }
+    uint64_t getCorePbAddr(void) const { return fFB.corePbAddr; }
 };
 
 #endif /* GA104Device_hpp */

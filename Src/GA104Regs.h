@@ -943,7 +943,7 @@ typedef struct {
 // RM Object Classes
 // ============================================================================
 
-#define NV01_ROOT                         0x00000000
+#define NV01_ROOT_HANDLE                  0x00000000
 #define NV01_ROOT_CLIENT                  0x00000041
 #define NV01_DEVICE_0                     0x00000080
 #define NV01_MEMORY_LOCAL_USER            0x000000C1
@@ -1144,7 +1144,6 @@ typedef struct {
 // NVC37E (Turing, 0xc37e) and NVC67E (Ampere, 0xc67e) share the same method offsets
 // From open-gpu-kernel-modules clc37e.h / clc67e.h
 #define NVC37E_UPDATE                      0x00000200
-#define NVC67E_UPDATE                      0x00000200   // same offset, Ampere class
 #define NVC37E_SET_SIZE                    0x00000224
 #define NVC37E_SET_STORAGE                 0x00000228
 #define NVC37E_SET_PARAMS                  0x0000022C

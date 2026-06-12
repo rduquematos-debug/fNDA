@@ -566,7 +566,7 @@ IOReturn GA104Device::sendGspRpcAllocRoot()
     for (uint32_t ri = 0; ri < wPtr; ri++) {
         uint32_t eIdx = ri % GSP_QUEUE_MSG_COUNT;
         uint8_t *mEntry = fMsgqEntryBase + eIdx * GSP_QUEUE_MSG_SIZE;
-        GspMsgQueuePrefix *mPre = (GspMsgQueuePrefix*)mEntry;
+        (void)mEntry; //
         GspRpcMessageHeader *mRpc = (GspRpcMessageHeader*)(mEntry + sizeof(GspMsgQueuePrefix));
         if (mRpc->function == NV_VGPU_MSG_FUNCTION_GSP_RM_ALLOC) {
             IOLog("GA104: ALLOC_ROOT response found in msgq: rpcResult=0x%x\n", mRpc->rpcResult);
@@ -773,9 +773,9 @@ IOReturn GA104Device::flipToTriangle()
 
     // Rasterizar triângulo com gradiente RGB barycentric
     // Vértices: A(960,100) vermelho, B(100,900) verde, C(1820,900) azul
-    float ax = 960, ay = 100; uint32_t cr = 0xFF0000FF; // ABGR: R=255
-    float bx = 100, by = 900; uint32_t cg = 0xFF00FF00; // G=255
-    float cx = 1820, cy = 900; uint32_t cb = 0xFFFF0000; // B=255
+    float ax = 960, ay = 100; /* cr unused */
+    float bx = 100, by = 900; /* cg unused */
+    float cx = 1820, cy = 900; /* cb unused */
 
     float denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
 
@@ -899,11 +899,11 @@ IOReturn GA104Device::bootGSP()
     setProperty("GA104GSP_Step0_Base", true);
 
     // Read Falcon state via FALCON_CPUCTL (BAR0+0x110100)
-    uint32_t cpuctl = readReg32(FALCON_CPUCTL);
+    uint32_t gspCpuctl1 = readReg32(FALCON_CPUCTL);
     uint32_t mailbox0 = readReg32(FALCON_MAILBOX0);
-    setProperty("GA104GSP_Step1_CPUCTL", cpuctl, 32);
+    setProperty("GA104GSP_Step1_CPUCTL", gspCpuctl1, 32);
     setProperty("GA104GSP_Step1_Mailbox0", mailbox0, 32);
-    IOLog("GA104: GSP CPUCTL=0x%08x mb0=0x%x\n", cpuctl, mailbox0);
+    IOLog("GA104: GSP CPUCTL=0x%08x mb0=0x%x\n", gspCpuctl1, mailbox0);
     IOReturn ret;
 
     // === Prepare GSP environment (used by both SEC2 and direct boot) ===
@@ -1102,12 +1102,11 @@ IOReturn GA104Device::bootGSP()
         }
         // Read MAILBOX0 for firmware status
         uint32_t mb0_val = readReg32(FALCON_MAILBOX0);  
-        uint32_t cpuctl = readReg32(FALCON_CPUCTL);   
-        uint32_t bcr    = readReg32(FALCON_BCR_CTRL);   
+        uint32_t gspCpuctlAfter = readReg32(FALCON_CPUCTL);   
+        uint32_t bcr            = readReg32(FALCON_BCR_CTRL);   
         IOLog("GA104: GSP mailbox0=0x%08x cpuctl=0x%08x bcr=0x%08x\n",
-              mb0_val, cpuctl, bcr);
-        setProperty("GA104_MB0", mb0_val, 32);
-        setProperty("GA104_CPUCTL", cpuctl, 32);
+              mb0_val, gspCpuctlAfter, bcr);
+        setProperty("GA104_CPUCTL", gspCpuctlAfter, 32);
         setProperty("GA104_BCR", bcr, 32);
         
         // If MB0 looks like an address, try reading from it via VRAM
@@ -1330,7 +1329,7 @@ IOReturn GA104Device::calculateVramLayout()
     uint64_t wpr2Size = (frtsAddr + frtsSize) - heapAddr;
 
     // Non-WPR heap (1MB below WPR2, only if space permits)
-    uint64_t nwprHeapSize = 0;
+    /* nwprHeapSize unused */ uint64_t nwprHeapSize_dummy = 0;
 
     // If VRAM is very small, pack things tightly
     if (heapAddr < 0x100000) {
@@ -1954,7 +1953,7 @@ IOReturn GA104Device::sendGspRpc(GspRpcMessageHeader *msg, void *payload,
     __sync_synchronize();
 
     // Doorbell: usar aliased offset (não writeAbsReg32 — fora do BAR0!)
-    uint32_t wpDoor = fCmdqTx ? fCmdqTx->writePtr : 0;
+    /* wpDoor unused */
     writeReg32(GSP_DOORBELL_REL, 0);  // aliased 0x0C00 -> QUEUE_HEAD(0)
     __sync_synchronize();
     setProperty("GA104_DoorbellMailbox", (uint32_t)fCmdqTx->writePtr, 32);
@@ -1970,6 +1969,7 @@ IOReturn GA104Device::sendGspRpc(GspRpcMessageHeader *msg, void *payload,
             uint32_t eIdx = rp % GSP_QUEUE_MSG_COUNT;
             uint8_t *mEntry = fMsgqEntryBase + eIdx * GSP_QUEUE_MSG_SIZE;
             GspMsgQueuePrefix *mPre = (GspMsgQueuePrefix*)mEntry;
+            (void)mPre; // quiet unused warning
             GspRpcMessageHeader *mRpc = (GspRpcMessageHeader*)(mEntry + sizeof(GspMsgQueuePrefix));
 
             if (mPre->seqNum == targetSeq && mRpc->function == targetFunc) {
@@ -2501,9 +2501,9 @@ IOReturn GA104Device::programHeadForMode(uint32_t head, uint32_t width, uint32_t
 
     // Timings for 1920x1080@60Hz (CVT-RB standard)
     uint32_t hVisible = width, vVisible = height;
-    uint32_t hTotal = 2200, hSyncStart = 2008, hSyncEnd = 2052;
+    uint32_t hTotal = 2200, /* hSyncStart=2008 */ hSyncEnd = 2052;
     uint32_t hBlankStart = hVisible, hBlankEnd = hTotal;
-    uint32_t vTotal = 1125, vSyncStart = 1084, vSyncEnd = 1088;
+    uint32_t vTotal = 1125, /* vSyncStart=1084 */ vSyncEnd = 1088;
     uint32_t vBlankStart = vVisible, vBlankEnd = vTotal;
     uint32_t pixelClockKHz = 148500; // 148.5 MHz
 
@@ -3117,23 +3117,23 @@ IOReturn GA104Device::gspStartBooter(void)
     __sync_synchronize();
 
     // === Step 7: Poll for Booter completion ===
-    uint32_t bcrStart = readReg32(FALCON_BCR_CTRL);
+    readReg32(FALCON_BCR_CTRL); /* bcrStart discarded */
     bool booterDone = false;
     for (int i = 0; i < 5000; i++) {
         IOSleep(2);
         uint32_t bcr = readReg32(FALCON_BCR_CTRL);
-        uint32_t cpuctl = readReg32(FALCON_CPUCTL);
+        uint32_t booterCpuctl = readReg32(FALCON_CPUCTL);
         // Booter sets BCR_CTRL = CORE_SELECT_RISCV when switching to RISC-V
         // On GA104, VALID bit (0x1) may not be set by the Booter
         if ((bcr & 0x10) == 0x10) {
             IOLog("GA104: Booter done after %dms (BCR=0x%08x CPUCTL=0x%08x)\n",
-                  i * 2, bcr, cpuctl);
+                  i * 2, bcr, booterCpuctl);
             booterDone = true;
             break;
         }
         if ((i % 1000) == 999) {
             IOLog("GA104:   still waiting... BCR=0x%08x CPUCTL=0x%08x\n",
-                  bcr, cpuctl);
+                  bcr, booterCpuctl);
         }
     }
 
