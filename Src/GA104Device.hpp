@@ -68,7 +68,15 @@ public:
                          GspRpcMessageHeader *reply, uint32_t replyMaxSize,
                          uint32_t *replySize, uint32_t timeoutMs);
     IOReturn sendGspRpcAllocRoot(void);
-    IOReturn sendGspRpcAllocDisplayChain(void);
+    IOReturn sendGspRpcAllocDevice(void);
+    IOReturn sendGspRpcAllocSubdevice(void);
+    IOReturn sendGspRpcAllocDisp(void);
+    IOReturn sendGspRpcDisplayInit(void);
+    IOReturn sendGspRpcDfpGetAttachedIds(uint32_t *displayIds, uint32_t *count);
+    IOReturn sendGspRpcDfpGetInfo(uint32_t displayId);
+    IOReturn sendGspRpcOrAssign(uint32_t displayId, uint32_t sorIndex, uint32_t protocol);
+    IOReturn sendGspRpcHeadSetTimings(uint32_t head, uint32_t width, uint32_t height, uint32_t refreshHz);
+    IOReturn sendGspRpcFlip(uint32_t head);
     IOReturn fillFramebuffer(uint32_t color);
     IOReturn programVPLL(void);
     IOReturn flipToTriangle(void);

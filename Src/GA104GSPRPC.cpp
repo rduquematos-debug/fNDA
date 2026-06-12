@@ -65,6 +65,254 @@ IOReturn GA104Device::sendGspRpcAllocRoot()
     IOLog("GA104: ALLOC_ROOT via cmdq failed (0x%x)\n", rpcRet);
     return rpcRet;
 }
+
+#pragma mark - Display Alloc Chain
+
+IOReturn GA104Device::sendGspRpcAllocDevice()
+{
+    if (!fGSPProtocol) return kIOReturnNotReady;
+    IOLog("GA104: Allocating GSP device...\n");
+
+    GspRpcMessageHeader msg, reply;
+    uint32_t replySz = 0;
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+
+    NvHandle hClient = fRmRoot ? fRmRoot : 0;
+    NvHandle hDevice = NVKM_RM_DEVICE;
+    fGSPProtocol->buildAllocDevice(&msg, hClient, hDevice, fDeviceID);
+    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    IOReturn ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader),
+        payloadSz, &reply, sizeof(reply), &replySz, 10000);
+
+    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
+        GspRmAllocParams *rm = (GspRmAllocParams*)((uint8_t*)&reply + sizeof(GspRpcMessageHeader));
+        fRmDevice = rm->hObject;
+        setProperty("GA104GSP_DeviceObj", (uint64_t)rm->hObject, 32);
+        IOLog("GA104: Device allocated (hObject=0x%x)\n", rm->hObject);
+        return kIOReturnSuccess;
+    }
+    IOLog("GA104: Device alloc failed (ret=0x%x result=0x%x)\n", ret, reply.rpcResult);
+    return ret == kIOReturnSuccess ? kIOReturnError : ret;
+}
+
+IOReturn GA104Device::sendGspRpcAllocSubdevice()
+{
+    if (!fGSPProtocol || !fRmDevice) return kIOReturnNotReady;
+    IOLog("GA104: Allocating GSP subdevice...\n");
+
+    GspRpcMessageHeader msg, reply;
+    uint32_t replySz = 0;
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+
+    NvHandle hClient = fRmRoot ? fRmRoot : 0;
+    NvHandle hSubdevice = NVKM_RM_SUBDEVICE;
+    fGSPProtocol->buildAllocSubdevice(&msg, hClient, fRmDevice, hSubdevice);
+    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    IOReturn ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader),
+        payloadSz, &reply, sizeof(reply), &replySz, 10000);
+
+    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
+        GspRmAllocParams *rm = (GspRmAllocParams*)((uint8_t*)&reply + sizeof(GspRpcMessageHeader));
+        fRmSubdevice = rm->hObject;
+        setProperty("GA104GSP_SubdeviceObj", (uint64_t)rm->hObject, 32);
+        IOLog("GA104: Subdevice allocated (hObject=0x%x)\n", rm->hObject);
+        return kIOReturnSuccess;
+    }
+    IOLog("GA104: Subdevice alloc failed (ret=0x%x result=0x%x)\n", ret, reply.rpcResult);
+    return ret == kIOReturnSuccess ? kIOReturnError : ret;
+}
+
+IOReturn GA104Device::sendGspRpcAllocDisp()
+{
+    if (!fGSPProtocol || !fRmSubdevice) return kIOReturnNotReady;
+    IOLog("GA104: Allocating GSP display...\n");
+
+    GspRpcMessageHeader msg, reply;
+    uint32_t replySz = 0;
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+
+    NvHandle hClient = fRmRoot ? fRmRoot : 0;
+    NvHandle hDisp = NVKM_RM_DISP;
+    fGSPProtocol->buildAllocDisp(&msg, hClient, fRmSubdevice, hDisp, 0xF, 0xF);
+    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    IOReturn ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader),
+        payloadSz, &reply, sizeof(reply), &replySz, 10000);
+
+    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
+        GspRmAllocParams *rm = (GspRmAllocParams*)((uint8_t*)&reply + sizeof(GspRpcMessageHeader));
+        fRmDisp = rm->hObject;
+        setProperty("GA104GSP_DispObj", (uint64_t)rm->hObject, 32);
+        IOLog("GA104: Display allocated (hObject=0x%x)\n", rm->hObject);
+        return kIOReturnSuccess;
+    }
+    IOLog("GA104: Display alloc failed (ret=0x%x result=0x%x)\n", ret, reply.rpcResult);
+    return ret == kIOReturnSuccess ? kIOReturnError : ret;
+}
+
+IOReturn GA104Device::sendGspRpcDisplayInit()
+{
+    // Full display initialization chain: Device → Subdevice → Disp
+    IOReturn ret;
+    ret = sendGspRpcAllocDevice();
+    if (ret != kIOReturnSuccess) return ret;
+    ret = sendGspRpcAllocSubdevice();
+    if (ret != kIOReturnSuccess) return ret;
+    ret = sendGspRpcAllocDisp();
+    if (ret != kIOReturnSuccess) return ret;
+    IOLog("GA104: Display init chain complete (Device=0x%x Subdev=0x%x Disp=0x%x)\n",
+          (uint32_t)fRmDevice, (uint32_t)fRmSubdevice, (uint32_t)fRmDisp);
+    setProperty("GA104GSP_DisplayReady", true);
+    return kIOReturnSuccess;
+}
+
+#pragma mark - Display Control RPCs
+
+IOReturn GA104Device::sendGspRpcDfpGetAttachedIds(uint32_t *displayIds, uint32_t *count)
+{
+    if (!fGSPProtocol || !fRmSubdevice || !displayIds || !count)
+        return kIOReturnBadArgument;
+
+    GspRpcMessageHeader msg, reply;
+    uint32_t replySz = 0;
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+
+    fGSPProtocol->buildDfpGetAttachedIds(&msg, fRmSubdevice);
+    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    IOReturn ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader),
+        payloadSz, &reply, sizeof(reply), &replySz, 10000);
+
+    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
+        uint32_t *ids = (uint32_t*)((uint8_t*)&reply + sizeof(GspRpcMessageHeader));
+        uint32_t numIds = (replySz - sizeof(GspRpcMessageHeader)) / sizeof(uint32_t);
+        if (numIds > *count) numIds = *count;
+        for (uint32_t i = 0; i < numIds; i++) displayIds[i] = ids[i];
+        *count = numIds;
+        IOLog("GA104: Attached displays: %u\n", numIds);
+        return kIOReturnSuccess;
+    }
+    return ret == kIOReturnSuccess ? kIOReturnError : ret;
+}
+
+IOReturn GA104Device::sendGspRpcDfpGetInfo(uint32_t displayId)
+{
+    if (!fGSPProtocol || !fRmSubdevice) return kIOReturnNotReady;
+
+    GspRpcMessageHeader msg, reply;
+    uint32_t replySz = 0;
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+
+    fGSPProtocol->buildDfpGetInfo(&msg, fRmSubdevice, displayId);
+    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    IOReturn ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader),
+        payloadSz, &reply, sizeof(reply), &replySz, 10000);
+
+    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
+        uint32_t dataSize = replySz - sizeof(GspRpcMessageHeader);
+        if (dataSize > 0 && dataSize <= sizeof(fEDID)) {
+            memcpy(fEDID, (uint8_t*)&reply + sizeof(GspRpcMessageHeader), dataSize);
+            fEDIDSize = dataSize;
+            setProperty("GA104_EDIDSize", fEDIDSize, 32);
+            IOLog("GA104: EDID for display 0x%x: %u bytes\n", displayId, fEDIDSize);
+        }
+        return kIOReturnSuccess;
+    }
+    return ret == kIOReturnSuccess ? kIOReturnError : ret;
+}
+
+IOReturn GA104Device::sendGspRpcOrAssign(uint32_t displayId, uint32_t sorIndex, uint32_t protocol)
+{
+    if (!fGSPProtocol || !fRmSubdevice) return kIOReturnNotReady;
+
+    GspRpcMessageHeader msg, reply;
+    uint32_t replySz = 0;
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+
+    fGSPProtocol->buildOrAssign(&msg, fRmSubdevice, displayId, ~(1 << sorIndex), protocol);
+    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    IOReturn ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader),
+        payloadSz, &reply, sizeof(reply), &replySz, 10000);
+
+    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
+        IOLog("GA104: Display 0x%x assigned to SOR %u protocol %u\n", displayId, sorIndex, protocol);
+        return kIOReturnSuccess;
+    }
+    return ret == kIOReturnSuccess ? kIOReturnError : ret;
+}
+
+IOReturn GA104Device::sendGspRpcHeadSetTimings(uint32_t head, uint32_t width,
+                                                uint32_t height, uint32_t refreshHz)
+{
+    if (!fGSPProtocol || !fRmDisp) return kIOReturnNotReady;
+
+    GSPModesetParams params;
+    bzero(&params, sizeof(params));
+    params.headIndex = head;
+    params.sorIndex = head;
+    params.width = width;
+    params.height = height;
+    params.refreshHz = refreshHz;
+    params.bpp = 32;
+    params.pitch = width * 4;
+    params.framebufferAddr = fFB.fbAddr;
+
+    // Timings for 1920x1080@60
+    params.hTotal = TIMING_1920x1080_60_HTOTAL;
+    params.vTotal = TIMING_1920x1080_60_VTOTAL;
+    params.hSyncStart = TIMING_1920x1080_60_HSYNC_START;
+    params.hSyncEnd = TIMING_1920x1080_60_HSYNC_END;
+    params.vSyncStart = TIMING_1920x1080_60_VSYNC_START;
+    params.vSyncEnd = TIMING_1920x1080_60_VSYNC_END;
+    params.hBlankStart = TIMING_1920x1080_60_HBLANK_START;
+    params.hBlankEnd = TIMING_1920x1080_60_HBLANK_END;
+    params.vBlankStart = TIMING_1920x1080_60_VBLANK_START;
+    params.vBlankEnd = TIMING_1920x1080_60_VBLANK_END;
+    params.clockKHz = TIMING_1920x1080_60_PCLOCK_KHZ;
+    params.colorFormat = NV_PWINDOW_FORMAT_B8G8R8A8;
+
+    GspRpcMessageHeader msg, reply;
+    uint32_t replySz = 0;
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+
+    fGSPProtocol->buildHeadSetTimings(&msg, fRmSubdevice, head, &params);
+    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    IOReturn ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader),
+        payloadSz, &reply, sizeof(reply), &replySz, 10000);
+
+    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
+        IOLog("GA104: Head %u timings set: %ux%u@%u\n", head, width, height, refreshHz);
+        return kIOReturnSuccess;
+    }
+    return ret == kIOReturnSuccess ? kIOReturnError : ret;
+}
+
+IOReturn GA104Device::sendGspRpcFlip(uint32_t head)
+{
+    if (!fGSPProtocol || !fRmSubdevice) return kIOReturnNotReady;
+
+    GspRpcMessageHeader msg, reply;
+    uint32_t replySz = 0;
+    bzero(&msg, sizeof(msg)); bzero(&reply, sizeof(reply));
+
+    fGSPProtocol->buildFlip(&msg, fRmSubdevice, head, fFB.fbAddr, fFB.pitch);
+    uint32_t payloadSz = msg.length - sizeof(GspRpcMessageHeader);
+    IOReturn ret = sendGspRpc(&msg,
+        (uint8_t*)&msg + sizeof(GspRpcMessageHeader),
+        payloadSz, &reply, sizeof(reply), &replySz, 10000);
+
+    if (ret == kIOReturnSuccess && reply.rpcResult == 0) {
+        IOLog("GA104: Flip head %u to FB 0x%llx\n", head, fFB.fbAddr);
+        return kIOReturnSuccess;
+    }
+    return ret == kIOReturnSuccess ? kIOReturnError : ret;
+}
+
 static void nvgMsgqCalcOffsets(uint32_t hdrAlign, uint32_t entryAlign,
                                 uint32_t *rxHdrOff, uint32_t *entryOff);
 static void nvgMsgqTxCreate(GspMsgqTxHeader *pTxHdr, uint32_t size, uint32_t msgSize,
