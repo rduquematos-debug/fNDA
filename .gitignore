@@ -1,3 +1,15 @@
 *.o
 *.kext/Contents/MacOS/*
+*.kext/Contents/Info.plist
 dev/
+*.plist
+*.fd
+*.img
+*.qcow2
+*.qcow2.*
+disk.qcow2
+OpenCore.qcow2
+OVMF_*
+macos-ventura.sh
+macos-ventura/
+serial.log

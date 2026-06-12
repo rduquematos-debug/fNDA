@@ -154,7 +154,7 @@ bool GA104Device::start(IOService *provider)
     }
 
     // Mapear BARs (pode falhar em VFIO)
-    // NOTA: Nao aceder a registos GPU aqui - causa panic em VFIO.
+    // NOTE: Do not access GPU registers here - causes panic in VFIO.
     // O acesso a registos e feito apenas via UserClient.
     IOReturn barRet = mapBars();
     if (barRet == kIOReturnSuccess && fBar0Virt) {

@@ -22,10 +22,6 @@
 
 ## Backup Strategy
 
-- `disk.qcow2.clean`: Created ONCE after fresh macOS install. **READ-ONLY** (chmod 444). Never written to.
-- `disk.qcow2.milestone`: Updated after each major milestone (working kext, VFIO, etc.)
-- `disk.qcow2.wip`: Working copy. Copied from `.clean` or `.milestone`
-- NEVER write to `.clean` — it's the inviolable recovery point
 
 ## Workflow
 
@@ -41,9 +37,3 @@
 - Before structural decisions (changing architecture, modifying boot config) → back-and-forth with user
 - User gives "go" / "sim" → execute
 - If uncertain → ask, don't assume
-
-## VM Operations
-
-- ALWAYS kill VM before mounting its disk images
-- NBD connections must be properly disconnected after use
-- Monitor socket (QEMU) is for debug and keyboard injection when necessary
